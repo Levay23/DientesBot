@@ -17,6 +17,10 @@ const router: IRouter = Router();
 // Evolución
 router.get("/clinical/evolution/:patientId", async (req, res): Promise<void> => {
   const patientId = parseInt(req.params.patientId, 10);
+  if (isNaN(patientId)) {
+    res.status(400).json({ error: "ID de paciente inválido" });
+    return;
+  }
   const notes = await db.select().from(evolutionNotesTable)
     .where(eq(evolutionNotesTable.patientId, patientId))
     .orderBy(desc(evolutionNotesTable.createdAt));

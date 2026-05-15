@@ -1,11 +1,16 @@
 import { useState, useEffect } from "react";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { useUpdatePatient, useListEvolutionNotes, useCreateEvolutionNote } from "@workspace/api-client-react";
+import { 
+  useUpdatePatient, 
+  useListEvolutionNotes, 
+  useCreateEvolutionNote, 
+  getListEvolutionNotesQueryKey 
+} from "@workspace/api-client-react";
 
 import Odontogram from "./odontogram";
 import { useToast } from "@/hooks/use-toast";
@@ -25,7 +30,11 @@ export default function PatientClinicalDialog({ patient, open, onOpenChange }: P
   
   const { toast } = useToast();
   const updatePatient = useUpdatePatient();
-  const { data: evolutions, refetch: refetchEvolutions } = useListEvolutionNotes({ patientId: patient?.id });
+  const params = { patientId: patient?.id };
+  const { data: evolutions, refetch: refetchEvolutions } = useListEvolutionNotes(
+    params,
+    { query: { enabled: !!patient?.id, queryKey: getListEvolutionNotesQueryKey(params) } }
+  );
   const createEvolution = useCreateEvolutionNote();
 
   useEffect(() => {
@@ -75,6 +84,9 @@ export default function PatientClinicalDialog({ patient, open, onOpenChange }: P
             Ficha Clínica: {patient?.name}
             <Badge variant="outline" className="text-[10px] ml-2">Ortodoncia</Badge>
           </DialogTitle>
+          <DialogDescription>
+            Historial clínico completo, odontograma y notas de evolución del paciente.
+          </DialogDescription>
         </DialogHeader>
 
         <Tabs defaultValue="odontogram" className="flex-1 flex flex-col mt-4">
