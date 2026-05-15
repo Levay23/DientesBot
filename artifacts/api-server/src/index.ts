@@ -5,10 +5,13 @@ import { runStartupSeed } from "./lib/startup-seed";
 import { startAutomationsEngine } from "./lib/automations-engine";
 import ffmpeg from "fluent-ffmpeg";
 import ffmpegStatic from "ffmpeg-static";
+import fs from "fs";
 
 // Configure ffmpeg globally for Baileys to convert audio to OGG Opus
-if (ffmpegStatic) {
+if (ffmpegStatic && fs.existsSync(ffmpegStatic)) {
   ffmpeg.setFfmpegPath(ffmpegStatic);
+} else {
+  logger.warn("ffmpeg-static binary not found, falling back to system ffmpeg");
 }
 
 const rawPort = process.env["PORT"];

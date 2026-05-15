@@ -1,7 +1,15 @@
 import { MsEdgeTTS, OUTPUT_FORMAT } from "msedge-tts";
 import ffmpeg from "fluent-ffmpeg";
+import ffmpegStatic from "ffmpeg-static";
 import { PassThrough } from "stream";
+import fs from "fs";
 import { logger } from "./logger";
+
+if (ffmpegStatic && fs.existsSync(ffmpegStatic)) {
+  ffmpeg.setFfmpegPath(ffmpegStatic);
+} else {
+  logger.warn("ffmpeg-static binary not found, falling back to system ffmpeg");
+}
 
 export async function synthesizeAudio(text: string): Promise<Buffer> {
   try {
