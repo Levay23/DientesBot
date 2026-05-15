@@ -10,14 +10,14 @@ export async function synthesizeAudio(text: string): Promise<Buffer> {
     // However, edge-tts handles plain text quite well.
     // If we wanted to adjust rate or pitch, we'd use SSML or the library's features.
     
-    // The toStream function returns a readable stream.
-    const stream = tts.toStream(text);
+    // The toStream function returns an object with audioStream
+    const { audioStream } = tts.toStream(text);
     
     const chunks: Buffer[] = [];
     return new Promise((resolve, reject) => {
-      stream.on("data", (chunk: Buffer) => chunks.push(chunk));
-      stream.on("end", () => resolve(Buffer.concat(chunks)));
-      stream.on("error", (err) => {
+      audioStream.on("data", (chunk: Buffer) => chunks.push(chunk));
+      audioStream.on("end", () => resolve(Buffer.concat(chunks)));
+      audioStream.on("error", (err) => {
         logger.error({ err }, "Error in TTS stream");
         reject(err);
       });
