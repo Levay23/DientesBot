@@ -2,6 +2,7 @@ import * as PImage from "pureimage";
 import * as fs from "fs";
 import * as path from "path";
 import { fileURLToPath } from "url";
+import { logger } from "./logger";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -122,13 +123,23 @@ export async function generateQuotationImage(data: {
 
 
   // Export to Buffer
-  const stream = new (await import("stream")).PassThrough();
-  await PImage.encodeJPEGToStream(img, stream);
+  const buffer = await PImage.encodeJPEGToStream(img, new (await import("stream")).PassThrough());
+  
+  // Note: some versions of pureimage encodeJPEGToStream return a promise that resolves to the stream
+  // We need to collect the chunks from the stream
+  const chunks: any[] = [];
+  const renderStream = await PImage.encodeJPEGToStream(img, new (await import("stream")).PassThrough());
   
   return new Promise((resolve, reject) => {
-    const chunks: any[] = [];
-    stream.on("data", (chunk) => chunks.push(chunk));
-    stream.on("end", () => resolve(Buffer.concat(chunks)));
-    stream.on("error", reject);
+    renderStream.on("data", (chunk) => chunks.push(chunk));
+    renderStream.on("end", () => {
+      const finalBuffer = Buffer.concat(chunks);
+      logger.info({ size: finalBuffer.length }, "Imagen de presupuesto generada exitosamente");
+      resolve(finalBuffer);
+    });
+    renderStream.on("error", (err) => {
+      logger.error({ err }, "Error en renderStream de pureimage");
+      reject(err);
+    });
   });
 }

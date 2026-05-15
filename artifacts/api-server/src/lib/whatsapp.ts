@@ -6,7 +6,7 @@ import makeWASocket, {
 import { Boom } from "@hapi/boom";
 import QRCode from "qrcode";
 import { db, conversationsTable, messagesTable, patientsTable, appointmentsTable, settingsTable } from "@workspace/db";
-import { eq, sql, and } from "drizzle-orm";
+import { eq, sql, or, and } from "drizzle-orm";
 import { generateAIResponse } from "./groq";
 import { logger } from "./logger";
 import { usePostgresAuthState } from "./postgres-auth-state";
@@ -226,6 +226,11 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo): Promise<void> 
     msg.message?.imageMessage?.caption ??
     "";
 
+  // Strip @s.whatsapp.net and device suffix (e.g. "573001234567:5@s.whatsapp.net" → "573001234567")
+  const phone = jid.split("@")[0].split(":")[0];
+  const formattedPhone = phone.startsWith("+") ? phone : `+${phone}`;
+  const pushName = msg.pushName ?? formattedPhone;
+
   // Si es audio, responder amablemente y salir si la IA está activa
   if (isAudio) {
     const globalBotEnabled = await syncBotEnabled();
@@ -253,11 +258,6 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo): Promise<void> 
   }
 
   if (!text.trim()) return;
-
-  // Strip @s.whatsapp.net and device suffix (e.g. "573001234567:5@s.whatsapp.net" → "573001234567")
-  const phone = jid.split("@")[0].split(":")[0];
-  const formattedPhone = phone.startsWith("+") ? phone : `+${phone}`;
-  const pushName = msg.pushName ?? formattedPhone;
 
   logger.info({ jid, text }, "Mensaje entrante de WhatsApp");
 

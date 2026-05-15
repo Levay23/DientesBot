@@ -42,7 +42,6 @@ export default function Conversations() {
     query: { 
       queryKey: getListConversationsQueryKey(params), 
       refetchInterval: 2500,
-      onSuccess: () => setLastSynced(new Date())
     }
   });
   const { data: detail, isLoading: detailLoading } = useGetConversation(selectedId!, {
@@ -50,9 +49,14 @@ export default function Conversations() {
       enabled: !!selectedId, 
       queryKey: getGetConversationQueryKey(selectedId!), 
       refetchInterval: 1500,
-      onSuccess: () => setLastSynced(new Date())
     }
   });
+
+  useEffect(() => {
+    if (conversations || detail) {
+      setLastSynced(new Date());
+    }
+  }, [conversations, detail]);
   const sendMessage = useSendMessage();
   const setMode = useSetConversationMode();
 
