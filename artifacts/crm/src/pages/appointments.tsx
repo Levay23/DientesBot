@@ -189,7 +189,7 @@ export default function Appointments() {
                       <div>
                         <p className="font-semibold text-foreground">{a.patientName}</p>
                         <p className="text-sm text-muted-foreground">{a.treatment}</p>
-                        <p className="text-xs text-muted-foreground">{a.patientPhone}</p>
+                        <p className="text-sm font-medium text-accent mt-0.5">{a.patientPhone}</p>
                         {a.notes && <p className="text-xs text-muted-foreground/70 mt-1 italic">{a.notes}</p>}
                       </div>
                     </div>
@@ -230,7 +230,7 @@ export default function Appointments() {
                         </td>
                         <td className="p-4">
                           <p className="font-medium">{a.patientName}</p>
-                          <p className="text-xs text-muted-foreground">{a.patientPhone}</p>
+                          <p className="text-sm font-semibold text-accent">{a.patientPhone}</p>
                         </td>
                         <td className="p-4 text-muted-foreground">{a.treatment}</td>
                         <td className="p-4">
@@ -296,12 +296,12 @@ export default function Appointments() {
           </DialogHeader>
           <div className="grid grid-cols-2 gap-4 py-2">
             <div className="col-span-2 space-y-1">
-              <div className="flex justify-between items-end">
-                <Label>Paciente *</Label>
+              <div className="flex justify-between items-center mb-1">
+                <Label className="text-sm">Paciente *</Label>
                 {form.patientId && (
-                  <span className="text-xs font-medium text-accent">
-                    Tel: {patients?.find(p => String(p.id) === form.patientId)?.phone}
-                  </span>
+                  <Badge variant="outline" className="text-sm font-bold text-accent bg-accent/5 border-accent/20 px-3 py-1">
+                    📞 {patients?.find(p => String(p.id) === form.patientId)?.phone}
+                  </Badge>
                 )}
               </div>
               <Select value={form.patientId} onValueChange={v => setForm(f => ({ ...f, patientId: v }))}>
