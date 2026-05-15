@@ -798,6 +798,7 @@ export const QuotationResponse = zod.object({
   items: zod.array(zod.object({
     service: zod.string(),
     price: zod.number(),
+    quantity: zod.number().default(1),
   })),
   total: zod.number(),
   status: zod.string(),
@@ -812,6 +813,7 @@ export const CreateQuotationBody = zod.object({
   items: zod.array(zod.object({
     service: zod.string(),
     price: zod.number(),
+    quantity: zod.number().default(1),
   })),
   total: zod.number(),
   sendToWhatsApp: zod.boolean().optional(),

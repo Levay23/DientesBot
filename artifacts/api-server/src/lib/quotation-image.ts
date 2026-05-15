@@ -30,7 +30,7 @@ export async function generateQuotationImage(data: {
 
   clinicName: string;
   patientName: string;
-  items: { service: string; price: number }[];
+  items: { service: string; price: number; quantity: number }[];
   total: number;
 }): Promise<Buffer> {
   await ensureFontLoaded();
@@ -79,9 +79,11 @@ export async function generateQuotationImage(data: {
   ctx.fillStyle = "#f8fafc";
   ctx.fillRect(50, 280, 700, 40);
   ctx.fillStyle = "#0f172a";
-  ctx.font = "14pt StandardFont";
+  ctx.font = "12pt StandardFont";
   ctx.fillText("SERVICIO / TRATAMIENTO", 60, 305);
-  ctx.fillText("PRECIO", 650, 305);
+  ctx.fillText("CANT", 430, 305);
+  ctx.fillText("P. UNIT", 520, 305);
+  ctx.fillText("SUBTOTAL", 640, 305);
 
   // Table Items
   let y = 350;
@@ -89,9 +91,18 @@ export async function generateQuotationImage(data: {
     ctx.fillStyle = idx % 2 === 0 ? "#ffffff" : "#f1f5f9";
     ctx.fillRect(50, y - 25, 700, 40);
     ctx.fillStyle = "#334155";
-    ctx.font = "14pt StandardFont";
-    ctx.fillText(item.service, 60, y);
-    ctx.fillText(`$${item.price.toLocaleString()}`, 650, y);
+    ctx.font = "13pt StandardFont";
+    
+    // Service name (truncate if too long)
+    const serviceName = item.service.length > 30 ? item.service.substring(0, 27) + "..." : item.service;
+    ctx.fillText(serviceName, 60, y);
+    
+    ctx.fillText(String(item.quantity || 1), 440, y);
+    ctx.fillText(`$${item.price.toLocaleString()}`, 520, y);
+    
+    const subtotal = (item.price * (item.quantity || 1));
+    ctx.fillText(`$${subtotal.toLocaleString()}`, 640, y);
+    
     y += 45;
   });
 
@@ -101,7 +112,7 @@ export async function generateQuotationImage(data: {
   ctx.fillStyle = "#ffffff";
   ctx.font = "20pt StandardFont";
   ctx.fillText("TOTAL ESTIMADO", 70, y + 60);
-  ctx.fillText(`$${data.total.toLocaleString()}`, 630, y + 60);
+  ctx.fillText(`$${data.total.toLocaleString()}`, 610, y + 60);
 
   // Footer
   ctx.fillStyle = "#94a3b8";

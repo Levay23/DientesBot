@@ -4,7 +4,6 @@ import {
   useListQuotations, 
   useCreateQuotation, 
   useUpdateQuotation, 
-  useListTreatments,
   getListQuotationsQueryKey,
   customFetch
 } from "@workspace/api-client-react";
@@ -22,12 +21,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 
-type QuotationItem = { service: string; price: number };
+type QuotationItem = { service: string; price: number; quantity: number };
 
 export default function Quotations() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [selectedPatientId, setSelectedPatientId] = useState<string>("");
-  const [items, setItems] = useState<QuotationItem[]>([{ service: "", price: 0 }]);
+  const [items, setItems] = useState<QuotationItem[]>([{ service: "", price: 0, quantity: 1 }]);
   const [sending, setSending] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   
@@ -36,40 +35,34 @@ export default function Quotations() {
 
   const { data: patients } = useListPatients();
   const { data: quotations, isLoading } = useListQuotations();
-  const { data: treatments } = useListTreatments();
   const createQuotation = useCreateQuotation();
   const updateQuotation = useUpdateQuotation();
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: getListQuotationsQueryKey() });
 
-  const addItem = () => setItems([...items, { service: "", price: 0 }]);
+  const addItem = () => setItems([...items, { service: "", price: 0, quantity: 1 }]);
   const removeItem = (idx: number) => setItems(items.filter((_, i) => i !== idx));
   const updateItem = (idx: number, field: keyof QuotationItem, value: any) => {
     const newItems = [...items];
-    newItems[idx] = { ...newItems[idx], [field]: field === "price" ? parseInt(value) || 0 : value };
-    
-    // Auto-populate price if service is selected from dropdown
-    if (field === "service") {
-      const treatment = treatments?.find(t => t.name === value);
-      if (treatment) {
-        newItems[idx].price = Math.round(parseFloat(treatment.price as any));
-      }
+    let finalValue = value;
+    if (field === "price" || field === "quantity") {
+      finalValue = parseInt(value) || 0;
     }
-    
+    newItems[idx] = { ...newItems[idx], [field]: finalValue };
     setItems(newItems);
   };
 
   const openEdit = (q: any) => {
     setEditingId(q.id);
     setSelectedPatientId(q.patientId.toString());
-    setItems(q.items);
+    setItems(q.items.map((i: any) => ({ ...i, quantity: i.quantity || 1 })));
     setDialogOpen(true);
   };
 
   const closeDialog = () => {
     setDialogOpen(false);
     setEditingId(null);
-    setItems([{ service: "", price: 0 }]);
+    setItems([{ service: "", price: 0, quantity: 1 }]);
     setSelectedPatientId("");
   };
 
@@ -85,7 +78,7 @@ export default function Quotations() {
     }
   };
 
-  const total = items.reduce((sum, item) => sum + item.price, 0);
+  const total = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
 
   const handleCreate = (sendToWhatsApp: boolean) => {
     if (!selectedPatientId) {
@@ -184,8 +177,8 @@ export default function Quotations() {
                     <div className="text-xs text-muted-foreground space-y-1">
                       {q.items.map((item: any, i: number) => (
                         <div key={i} className="flex justify-between">
-                          <span>{item.service}</span>
-                          <span>${item.price.toLocaleString()}</span>
+                          <span>{item.service} {item.quantity > 1 && `(x${item.quantity})`}</span>
+                          <span>${(item.price * (item.quantity || 1)).toLocaleString()}</span>
                         </div>
                       ))}
                     </div>
@@ -198,7 +191,7 @@ export default function Quotations() {
       </div>
 
       <Dialog open={dialogOpen} onOpenChange={o => !o && closeDialog()}>
-        <DialogContent className="max-w-2xl bg-card border-border">
+        <DialogContent className="max-w-3xl bg-card border-border">
           <DialogHeader>
             <DialogTitle>{editingId ? "Editar Presupuesto" : "Generar Presupuesto Profesional"}</DialogTitle>
           </DialogHeader>
@@ -222,26 +215,34 @@ export default function Quotations() {
               <div className="flex items-center justify-between">
                 <Label className="text-xs uppercase tracking-wider text-muted-foreground">Servicios / Tratamientos</Label>
                 <Button variant="ghost" size="sm" onClick={addItem} className="text-accent h-7 px-2">
-                  <Plus className="h-3.5 w-3.5 mr-1" /> Añadir
+                  <Plus className="h-3.5 w-3.5 mr-1" /> Añadir Fila
                 </Button>
               </div>
               
-              <div className="space-y-3 max-h-72 overflow-y-auto pr-2 custom-scrollbar">
+              <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
                 {items.map((item, idx) => (
-                  <div key={idx} className="flex gap-2 items-start bg-muted/10 p-2 rounded-lg border border-border/30">
-                    <div className="flex-1 space-y-1">
-                      <Select value={item.service} onValueChange={v => updateItem(idx, "service", v)}>
-                        <SelectTrigger className="bg-background">
-                          <SelectValue placeholder="Seleccionar servicio..." />
-                        </SelectTrigger>
-                        <SelectContent className="max-h-[250px] overflow-y-auto">
-                          {treatments?.map(t => (
-                            <SelectItem key={t.id} value={t.name}>{t.name}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                  <div key={idx} className="flex gap-2 items-end bg-muted/5 p-3 rounded-lg border border-border/30 relative group/row">
+                    <div className="flex-[3] space-y-1.5">
+                      <Label className="text-[10px] text-muted-foreground ml-1">Servicio</Label>
+                      <Input 
+                        placeholder="Escribe el servicio..." 
+                        value={item.service} 
+                        onChange={e => updateItem(idx, "service", e.target.value)}
+                        className="bg-background"
+                      />
                     </div>
-                    <div className="w-32">
+                    <div className="w-20 space-y-1.5">
+                      <Label className="text-[10px] text-muted-foreground ml-1">Cant.</Label>
+                      <Input 
+                        type="number" 
+                        min="1"
+                        value={item.quantity || ""} 
+                        onChange={e => updateItem(idx, "quantity", e.target.value)}
+                        className="bg-background text-center"
+                      />
+                    </div>
+                    <div className="w-32 space-y-1.5">
+                      <Label className="text-[10px] text-muted-foreground ml-1">Precio Unit.</Label>
                       <Input 
                         type="number" 
                         placeholder="Precio" 
@@ -250,12 +251,18 @@ export default function Quotations() {
                         className="bg-background text-right"
                       />
                     </div>
+                    <div className="w-32 space-y-1.5">
+                      <Label className="text-[10px] text-muted-foreground ml-1">Subtotal</Label>
+                      <div className="h-10 flex items-center justify-end px-3 bg-muted/20 rounded-md border border-border/30 text-sm font-medium">
+                        ${(item.price * item.quantity).toLocaleString()}
+                      </div>
+                    </div>
                     <Button 
                       variant="ghost" 
                       size="icon" 
                       onClick={() => removeItem(idx)} 
                       disabled={items.length === 1} 
-                      className="text-muted-foreground hover:text-destructive h-10 w-10"
+                      className="text-muted-foreground hover:text-destructive h-10 w-10 mb-0"
                     >
                       <Trash2 className="h-4 w-4" />
                     </Button>
@@ -267,14 +274,14 @@ export default function Quotations() {
             <div className="pt-4 border-t border-border/50 flex justify-between items-center">
               <div className="text-muted-foreground">
                 <p className="text-sm">Total Presupuesto</p>
-                <p className="text-2xl font-bold text-accent">${total.toLocaleString()}</p>
+                <p className="text-3xl font-bold text-accent">${total.toLocaleString()}</p>
               </div>
               <div className="flex gap-3">
                 <Button variant="outline" onClick={() => handleCreate(false)}>Solo Guardar</Button>
                 <Button 
                   onClick={() => handleCreate(true)} 
                   disabled={createQuotation.isPending || updateQuotation.isPending}
-                  className="bg-accent text-accent-foreground hover:bg-accent/90"
+                  className="bg-accent text-accent-foreground hover:bg-accent/90 px-6"
                 >
                   <Send className="h-4 w-4 mr-2" />
                   {sending ? "Enviando..." : editingId ? "Actualizar y Enviar" : "Crear y Enviar WhatsApp"}
