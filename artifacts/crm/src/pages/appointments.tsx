@@ -296,7 +296,14 @@ export default function Appointments() {
           </DialogHeader>
           <div className="grid grid-cols-2 gap-4 py-2">
             <div className="col-span-2 space-y-1">
-              <Label>Paciente *</Label>
+              <div className="flex justify-between items-end">
+                <Label>Paciente *</Label>
+                {form.patientId && (
+                  <span className="text-xs font-medium text-accent">
+                    Tel: {patients?.find(p => String(p.id) === form.patientId)?.phone}
+                  </span>
+                )}
+              </div>
               <Select value={form.patientId} onValueChange={v => setForm(f => ({ ...f, patientId: v }))}>
                 <SelectTrigger className="bg-background"><SelectValue placeholder="Seleccionar paciente" /></SelectTrigger>
                 <SelectContent>{(patients ?? []).map(p => <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>)}</SelectContent>
