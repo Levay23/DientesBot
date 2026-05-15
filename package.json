@@ -11,5 +11,14 @@
   "devDependencies": {
     "typescript": "~5.9.3",
     "prettier": "^3.8.1"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "ffmpeg-static",
+      "msedge-tts",
+      "@whiskeysockets/baileys",
+      "esbuild",
+      "protobufjs"
+    ]
   }
 }

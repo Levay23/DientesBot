@@ -1,5 +1,6 @@
 import makeWASocket, {
   DisconnectReason,
+  downloadMediaMessage,
   proto,
   type WASocket,
 } from "@whiskeysockets/baileys";
@@ -7,7 +8,8 @@ import { Boom } from "@hapi/boom";
 import QRCode from "qrcode";
 import { db, conversationsTable, messagesTable, patientsTable, appointmentsTable, settingsTable } from "@workspace/db";
 import { eq, sql, or, and } from "drizzle-orm";
-import { generateAIResponse } from "./groq";
+import { generateAIResponse, transcribeAudio } from "./groq";
+import { synthesizeAudio } from "./tts";
 import { logger } from "./logger";
 import { usePostgresAuthState } from "./postgres-auth-state";
 
@@ -220,18 +222,14 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo): Promise<void> 
   // Detectar si es un audio/nota de voz (PTT o audio normal)
   const isAudio = !!msg.message?.audioMessage;
 
-  const text =
-    msg.message?.conversation ??
-    msg.message?.extendedTextMessage?.text ??
-    msg.message?.imageMessage?.caption ??
-    "";
-
   // Strip @s.whatsapp.net and device suffix (e.g. "573001234567:5@s.whatsapp.net" → "573001234567")
   const phone = jid.split("@")[0].split(":")[0];
   const formattedPhone = phone.startsWith("+") ? phone : `+${phone}`;
   const pushName = msg.pushName ?? formattedPhone;
 
-  // Si es audio, responder amablemente y salir si la IA está activa
+  let text = "";
+  let wasAudio = false;
+
   if (isAudio) {
     const globalBotEnabled = await syncBotEnabled();
     const [existingConv] = await db.select().from(conversationsTable)
@@ -243,23 +241,28 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo): Promise<void> 
       return;
     }
 
-    logger.info({ jid }, "Audio recibido — respondiendo con mensaje de texto");
-    const audioReplies = [
-      "¡Buen día! 😊 En Dientes Fijos Medellín solo podemos recibir mensajes de texto por el momento. ¿Me podría escribir su consulta? Con mucho gusto le ayudaremos 🦷✨",
-      "¡Hola! 😊 Qué pena, en este canal de Dientes Fijos Medellín solo manejamos mensajes de texto. ¿Me podría escribir lo que necesita? Con todo el gusto le atenderemos.",
-      "Hola, bienvenido(a) a Dientes Fijos Medellín 🦷 Por ahora solo recibimos mensajes escritos por este medio. ¿Me cuenta en qué le podemos colaborar el día de hoy? 😊",
-    ];
-    const reply = audioReplies[Math.floor(Math.random() * audioReplies.length)];
-    if (sock) {
-      await sock.sendMessage(jid, { text: reply! });
-      logger.info({ jid }, "Respuesta automática de audio enviada");
+    try {
+      logger.info({ jid }, "Audio recibido — descargando y transcribiendo");
+      const buffer = await downloadMediaMessage(msg, "buffer", { }, { logger: logger as any });
+      const mimetype = msg.message?.audioMessage?.mimetype || "audio/ogg; codecs=opus";
+      text = await transcribeAudio(buffer as Buffer, mimetype);
+      wasAudio = true;
+      logger.info({ jid, transcription: text }, "Audio transcrito con éxito");
+    } catch (err) {
+      logger.error({ err }, "Error procesando audio");
+      return;
     }
-    return;
+  } else {
+    text =
+      msg.message?.conversation ??
+      msg.message?.extendedTextMessage?.text ??
+      msg.message?.imageMessage?.caption ??
+      "";
   }
 
   if (!text.trim()) return;
 
-  logger.info({ jid, text }, "Mensaje entrante de WhatsApp");
+  logger.info({ jid, text, wasAudio }, "Mensaje entrante de WhatsApp");
 
 
   try {
@@ -337,10 +340,21 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo): Promise<void> 
           }).where(eq(conversationsTable.id, conv.id));
 
     if (sock) {
-      logger.info({ jid, status: _state.status }, "Intentando enviar respuesta IA a WhatsApp...");
+      logger.info({ jid, status: _state.status, wasAudio }, "Intentando enviar respuesta IA a WhatsApp...");
       try {
-        await sock.sendMessage(jid, { text: aiText });
-        logger.info({ jid, aiText }, "Respuesta IA enviada exitosamente a WhatsApp");
+        if (wasAudio) {
+          logger.info({ jid }, "Sintetizando audio (TTS) para responder nota de voz");
+          const audioBuffer = await synthesizeAudio(aiText);
+          await sock.sendMessage(jid, {
+            audio: audioBuffer,
+            mimetype: "audio/mp4",
+            ptt: true,
+          });
+          logger.info({ jid }, "Respuesta IA enviada exitosamente como nota de voz");
+        } else {
+          await sock.sendMessage(jid, { text: aiText });
+          logger.info({ jid, aiText }, "Respuesta IA enviada exitosamente como texto");
+        }
       } catch (wsErr) {
         logger.error({ wsErr, jid }, "Error al enviar mensaje a través de WhatsApp Socket");
       }

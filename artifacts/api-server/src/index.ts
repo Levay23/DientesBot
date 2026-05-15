@@ -3,7 +3,13 @@ import { logger } from "./lib/logger";
 import { startWhatsApp } from "./lib/whatsapp";
 import { runStartupSeed } from "./lib/startup-seed";
 import { startAutomationsEngine } from "./lib/automations-engine";
+import ffmpeg from "fluent-ffmpeg";
+import ffmpegStatic from "ffmpeg-static";
 
+// Configure ffmpeg globally for Baileys to convert audio to OGG Opus
+if (ffmpegStatic) {
+  ffmpeg.setFfmpegPath(ffmpegStatic);
+}
 
 const rawPort = process.env["PORT"];
 

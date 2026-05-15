@@ -1,4 +1,4 @@
-import Groq from "groq-sdk";
+import Groq, { toFile } from "groq-sdk";
 import { db, settingsTable, conversationsTable, messagesTable, patientsTable, aiKnowledgeTable, aiPersonalityTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { logger } from "./logger";
@@ -349,6 +349,26 @@ Sin accion clara = null. testMode = todas null.`;
     };
   } catch (err) {
     logger.error({ err }, "Error generando respuesta IA con Groq");
+    throw err;
+  }
+}
+
+export async function transcribeAudio(buffer: Buffer, mimetype: string): Promise<string> {
+  try {
+    // Whisper model accepts specific formats. WhatsApp OGG Opus is usually fine.
+    // Mimetype from WhatsApp might be "audio/ogg; codecs=opus"
+    const fileExtension = mimetype.includes("ogg") ? "ogg" : "m4a";
+    const file = await toFile(buffer, `audio.${fileExtension}`);
+    
+    const transcription = await getGroq().audio.transcriptions.create({
+      file,
+      model: "whisper-large-v3-turbo",
+      language: "es", // Optimize for Spanish
+    });
+    
+    return transcription.text;
+  } catch (err) {
+    logger.error({ err }, "Error transcribing audio with Groq");
     throw err;
   }
 }
