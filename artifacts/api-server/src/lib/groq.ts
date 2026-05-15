@@ -1,6 +1,6 @@
 import Groq, { toFile } from "groq-sdk";
 import { db, settingsTable, conversationsTable, messagesTable, patientsTable, aiKnowledgeTable, aiPersonalityTable, quotationsTable } from "@workspace/db";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, asc } from "drizzle-orm";
 import { logger } from "./logger";
 
 let _groq: Groq | null = null;
@@ -80,45 +80,35 @@ export async function generateAIResponse(
     const { dateStr: colombiaDate, timeStr: colombiaTime, dayName: colombiaDay } = getColombiaNow();
 
     let patientContext = "";
-    let patientAlreadyRegistered = false;
-    let patientHasPhone = false;
     let quotationsContext = "";
 
     if (conversationId && !opts.testMode) {
       const [conv] = await db.select().from(conversationsTable).where(eq(conversationsTable.id, conversationId));
       if (conv?.patientId) {
-        patientAlreadyRegistered = true;
         const [patient] = await db.select().from(patientsTable).where(eq(patientsTable.id, conv.patientId));
         if (patient) {
           const firstName = patient.name.split(" ")[0];
-          patientHasPhone = !!(patient.phone && !patient.phone.startsWith("+57") && patient.phone.length <= 12);
-          patientContext = `\nPACIENTE REGISTRADO:\n- Nombre: ${patient.name} (llámalo/a "${firstName}")\n- Teléfono guardado: ${patient.phone}${patientHasPhone ? " (ya tiene celular propio)" : " (solo tiene número de WhatsApp — aún necesitamos su celular de contacto)"}\n- Tratamiento: ${patient.treatment ?? "sin especificar"}\n- Estado: ${patient.status}`;
+          patientContext = `\nPACIENTE REGISTRADO:\n- Nombre: ${patient.name} (llámalo/a "${firstName}")\n- Teléfono: ${patient.phone}\n- Tratamiento: ${patient.treatment ?? "sin especificar"}\n- Estado: ${patient.status}`;
           
-          // Fetch quotes for the patient
           const quotes = await db.select().from(quotationsTable)
             .where(eq(quotationsTable.patientId, conv.patientId))
             .orderBy(desc(quotationsTable.createdAt))
             .limit(3);
           
           if (quotes.length > 0) {
-            quotationsContext = "\n━━━ COTIZACIONES DEL PACIENTE ━━━";
+            quotationsContext = "\n━━━ COTIZACIONES VIGENTES ━━━";
             for (const q of quotes) {
-              const itemsSummary = (q.items as any[]).map(it => `- ${it.service}: $${Number(it.price).toLocaleString()}`).join("\n");
-              quotationsContext += `\nCotización #${q.id} (${q.status}):\n${itemsSummary}\nTOTAL: $${Number(q.total).toLocaleString()}\n`;
+              const items = (q.items as any[]).map(it => `- ${it.service}: $${Number(it.price).toLocaleString()}`).join("\n");
+              quotationsContext += `\nCotización #${q.id} (${q.status}):\n${items}\nTOTAL: $${Number(q.total).toLocaleString()}\n`;
             }
-            quotationsContext += "Si el paciente pide su cotización o presupuesto, reenvíale amablemente estos datos.";
           }
         }
-      } else if (conv?.patientName) {
-        patientContext = `\nNombre del contacto: ${conv.patientName} (aún no registrado como paciente).`;
       }
-    } else if (opts.patientName) {
-      patientContext = `\nEstás hablando con: ${opts.patientName}.`;
     }
 
-    // Smart knowledge filtering
+    // Knowledge Map - Optimized for service discovery
     const KEYWORD_MAP: Record<string, string[]> = {
-      "Odontología General — Precios":       ["resina","obturac","caries","sellante","profilaxis","limpieza","higiene","urgencia","calculo","sarro","general","servicios","ofrecen","hacen","hace"],
+      "Odontología General — Precios":       ["resina","obturac","caries","sellante","profilaxis","limpieza","higiene","urgencia","calculo","sarro","general","servicios","ofrecen","hacen","disponibles","ofrece"],
       "Blanqueamiento Dental — Precios":     ["blanquea","whitening","aclar","diente amarillo","mancha"],
       "Estética Dental — Carillas y Diseño de Sonrisa": ["carilla","diseño de sonrisa","estética","veneers","microdiseño","cerómero","disilicato","sonrisa"],
       "Rehabilitación Oral — Coronas y Prótesis": ["corona","rehabilit","incrustac","nucleo","pilar","puente","recementar","provisional","platino","tradicional","zirconio"],
@@ -131,9 +121,7 @@ export async function generateAIResponse(
       "Información sobre pagos y política de citas": ["pago","precio","cobro","cuota","financi","cancelar","politica","horario","direccion","ubicacion","costo","valor","cuanto vale","cuánto vale","cuanto cuesta","cuánto cuesta","cotizacion","presupuesto"],
     };
 
-    const historyForSearch = (opts.history ?? []).slice(-4).map(m => m.content).join(" ");
-    const searchText = (patientMessage + " " + historyForSearch).toLowerCase();
-
+    const searchText = (patientMessage + " " + (opts.history ?? []).slice(-2).map(m => m.content).join(" ")).toLowerCase();
     const filteredEntries = knowledgeEntries.filter(entry => {
       if (entry.category === "general") return true;
       const keywords = KEYWORD_MAP[entry.title] ?? [];
@@ -141,33 +129,21 @@ export async function generateAIResponse(
     });
 
     const entriesToUse = filteredEntries.length > 0 ? filteredEntries : knowledgeEntries.filter(e => e.category === "general");
-
-    let knowledgeSection = "";
-    if (entriesToUse.length > 0) {
-      const items = entriesToUse.map(e => `[${e.title}]\n${e.content}`).join("\n\n");
-      knowledgeSection = `\n━━━ INFORMACIÓN DEL CONSULTORIO ━━━\n${items}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
-    }
+    const knowledgeSection = entriesToUse.length > 0 
+      ? `\nINFORMACIÓN DE LA CLÍNICA:\n${entriesToUse.map(e => `[${e.title}]\n${e.content}`).join("\n\n")}\n`
+      : "";
 
     let conversationHistory: { role: "user" | "assistant"; content: string }[] = [];
-    let isNewSession = false;
-
     if (opts.history) {
       conversationHistory = opts.history;
-      isNewSession = conversationHistory.filter(m => m.role === "assistant").length === 0;
     } else if (conversationId) {
       const pastMessages = await db.select().from(messagesTable)
         .where(eq(messagesTable.conversationId, conversationId))
-        .orderBy(messagesTable.sentAt)
-        .limit(20);
-
-      const SESSION_GAP_MS = 4 * 60 * 60 * 1000;
-      const lastAiMsg = [...pastMessages].reverse().find(m => m.sender === "ai");
-      const timeSinceLast = lastAiMsg?.sentAt ? Date.now() - new Date(lastAiMsg.sentAt).getTime() : Infinity;
-      
-      isNewSession = !lastAiMsg || timeSinceLast > SESSION_GAP_MS;
+        .orderBy(asc(messagesTable.id)) // Stable ordering by ID
+        .limit(15);
 
       conversationHistory = pastMessages
-        .filter(m => m.sender === "patient" || m.sender === "ai" || m.sender === "agent")
+        .filter(m => m.sender === "patient" || m.sender === "ai")
         .map(m => ({
           role: m.sender === "patient" ? "user" as const : "assistant" as const,
           content: m.content,
@@ -175,101 +151,41 @@ export async function generateAIResponse(
     }
 
     const assistantName = p?.name ?? "Andrea";
-    const lengthGuide: Record<string, string> = {
-      corta: "Máximo 2 oraciones por respuesta. Directa y natural.",
-      media: "2-3 oraciones. Sin rodeos.",
-      larga: "Responde con detalle cuando sea necesario.",
-    };
-    const lengthInstruction = lengthGuide[p?.maxResponseLength ?? "corta"] ?? lengthGuide.corta;
+    const hasSpoken = conversationHistory.some(m => m.role === "assistant");
 
-    const escalateKeywords = (p?.escalateKeywords ?? "emergencia,urgencia,dolor fuerte,accidente,hemorragia")
-      .split(",").map(k => k.trim()).filter(Boolean);
-    const needsEscalate = escalateKeywords.some(kw => patientMessage.toLowerCase().includes(kw.toLowerCase()));
+    const systemPrompt = `Eres ${assistantName}, la asistente virtual de ${clinicName} en Medellín.
+Persona real, profesional, amable y servicial. No digas que eres IA.
+HOY: ${colombiaDay} ${colombiaDate}, ${colombiaTime}.
 
-    let availableSlotsSection = "";
-    if (opts.availableSlots && opts.availableSlots.length > 0) {
-      const hasSlots = opts.availableSlots.some(d => d.slots.length > 0);
-      if (hasSlots) {
-        availableSlotsSection = `\n\nHORARIOS DISPONIBLES:`;
-        for (const { label, slots } of opts.availableSlots) {
-          if (slots.length > 0) {
-            availableSlotsSection += `\n• ${label}: ${slots.slice(0, 6).map(s => to12h(s)).join(" / ")}`;
-          }
-        }
-        availableSlotsSection += `\n⚠️ Son las ${colombiaTime}.`;
-      }
-    }
+INSTRUCCIONES DE COMPORTAMIENTO:
+1. SALUDO: 
+   - Si es el primer mensaje del chat: Preséntate ("Hola, soy ${assistantName} de ${clinicName}...") y ofrece ayuda.
+   - Si ya han hablado antes (ver historial): NO te presentes de nuevo. Responde directamente a la duda del paciente.
+2. CONOCIMIENTO: Usa la información de la clínica para responder precios y servicios. Si no sabes algo, invita a una valoración.
+3. ESTILO: Profesional, cálida, directa. Usa "Usted". Prohibido: "mi amor", "corazón", "bacano".
+4. COTIZACIONES: Si el paciente tiene cotizaciones previas, menciónalas si pregunta por costos.
 
-    const greetingInstruction = isNewSession
-      ? `INICIO DE SESIÓN: Preséntate mencionando "Dientes Fijos Medellín". Ejemplo: "Muy buen día. Bienvenido(a) a Dientes Fijos Medellín, soy ${assistantName}, su asistente. ¿En qué le puedo colaborar el día de hoy?"`
-      : `CONVERSACIÓN ACTIVA: NO te vuelvas a presentar. Responde directamente o con un saludo breve: "Hola de nuevo. ¿En qué puedo seguir ayudándole?"`;
+PACIENTE:${patientContext}${quotationsContext}
+${knowledgeSection}
 
-    const systemPrompt = `Eres ${assistantName}, asistente oficial de ${clinicName}, Medellín. Persona real del equipo.
-HOY: ${colombiaDay} ${colombiaDate}, ${colombiaTime} (Colombia).${patientContext}${quotationsContext}
-
-ESTILO ANDREA:
-Profesional, respetuosa, atenta y cálida (estilo secretaria de salud de Medellín). 
-- Usa "Usted" o "Tú" de forma respetuosa.
-- Términos prohibidos: "mi amor", "corazón", "bacano", "chévere", "querido/a".
-
-REGLA DE SALUDO:
-${greetingInstruction}
-${needsEscalate ? "URGENCIA: Comprendo su situación. Vamos a priorizar su atención." : ""}
-
-ESTILO DE RESPUESTA:
-- ${lengthInstruction}
-- Máximo 1 emoji por mensaje.
-
-FLUJO DE AGENDAMIENTO:
-1. NECESIDAD -> 2. NOMBRE -> 3. REGISTRO -> 4. MOTIVO -> 5. HORARIOS -> 6. CELULAR -> 7. CONFIRMACIÓN (bookAppointment)
-
-INFORMACION DEL CONSULTORIO:
-Horario: ${cfg?.workingHoursStart ? to12h(cfg.workingHoursStart) : "8:00 a.m."} a ${cfg?.workingHoursEnd ? to12h(cfg.workingHoursEnd) : "6:00 p.m."}, lunes a sabado.${cfg?.clinicPhone ? ` Tel: ${cfg.clinicPhone}.` : ""}${cfg?.clinicAddress ? ` Dir: ${cfg.clinicAddress}.` : ""}
-${knowledgeSection}${availableSlotsSection}
-
-FORMATO DE RESPUESTA:
-Responde UNICAMENTE con JSON:
+FORMATO DE RESPUESTA (JSON ÚNICAMENTE):
 {"message":"tu respuesta","actions":{"registerPatient":null,"bookAppointment":null,"updatePhone":null,"updateStatus":null}}`;
 
     const messages = [
-      ...conversationHistory.slice(-20),
+      { role: "system" as const, content: systemPrompt },
+      ...conversationHistory.slice(-10),
       { role: "user" as const, content: patientMessage },
     ];
 
-    const requestParams = {
-      messages: [{ role: "system" as const, content: systemPrompt }, ...messages],
+    const completion = await getGroq().chat.completions.create({
+      model: "llama-3.3-70b-versatile",
+      messages,
       response_format: { type: "json_object" as const },
-      max_tokens: p?.maxResponseLength === "larga" ? 800 : 500,
-      temperature: 0.7,
-    };
-
-    async function callWithRetry(model: string, attempt = 0): Promise<Groq.Chat.ChatCompletion> {
-      try {
-        return await getGroq().chat.completions.create({ model, ...requestParams });
-      } catch (err: any) {
-        if (err?.status === 429 && attempt < 2) {
-          await new Promise(r => setTimeout(r, 2000));
-          return callWithRetry(model, attempt + 1);
-        }
-        throw err;
-      }
-    }
-
-    const MODEL_CHAIN = ["llama-3.3-70b-versatile", "llama-3.1-70b-versatile", "mixtral-8x7b-32768"];
-    let completion;
-    for (const model of MODEL_CHAIN) {
-      try {
-        completion = await callWithRetry(model);
-        break;
-      } catch (err: any) {
-        if (err?.status === 429) continue;
-        throw err;
-      }
-    }
-    if (!completion) throw new Error("No model available");
+      temperature: 0.6,
+    });
 
     const rawContent = completion.choices[0]?.message?.content?.trim() ?? "";
-    let parsed: any = JSON.parse(rawContent);
+    const parsed = JSON.parse(rawContent);
 
     return {
       message: parsed.message || "",
@@ -281,15 +197,14 @@ Responde UNICAMENTE con JSON:
       },
     };
   } catch (err) {
-    logger.error({ err }, "Error generando respuesta IA");
+    logger.error({ err }, "Error en AI");
     throw err;
   }
 }
 
 export async function transcribeAudio(buffer: Buffer, mimetype: string): Promise<string> {
   try {
-    const fileExtension = mimetype.includes("ogg") ? "ogg" : "m4a";
-    const file = await toFile(buffer, `audio.${fileExtension}`);
+    const file = await toFile(buffer, "audio.ogg");
     const transcription = await getGroq().audio.transcriptions.create({
       file,
       model: "whisper-large-v3-turbo",
@@ -297,7 +212,7 @@ export async function transcribeAudio(buffer: Buffer, mimetype: string): Promise
     });
     return transcription.text;
   } catch (err) {
-    logger.error({ err }, "Error transcribing audio");
+    logger.error({ err }, "Error STT");
     throw err;
   }
 }
