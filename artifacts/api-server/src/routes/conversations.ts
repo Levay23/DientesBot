@@ -173,10 +173,15 @@ router.post("/conversations/incoming", async (req, res): Promise<void> => {
   const { phone, message, patientName } = req.body as { phone: string; message: string; patientName?: string };
   if (!phone || !message) { res.status(400).json({ error: "Se requiere phone y message" }); return; }
 
-  // Buscar conversación existente o crear una nueva
-  let [conv] = await db.select().from(conversationsTable).where(eq(conversationsTable.phone, phone));
-  if (!conv) {
-    const [existingPatient] = await db.select().from(patientsTable).where(eq(patientsTable.phone, phone));
+  // Buscar todas las conversaciones posibles (con o sin +) para evitar duplicados
+  const allConvs = await db.select().from(conversationsTable)
+    .where(or(eq(conversationsTable.phone, phone), eq(conversationsTable.phone, `+${phone}`)))
+    .orderBy(sql`${conversationsTable.lastMessageAt} desc nulls last`);
+
+  let conv;
+  if (allConvs.length === 0) {
+    const [existingPatient] = await db.select().from(patientsTable)
+      .where(or(eq(patientsTable.phone, phone), eq(patientsTable.phone, `+${phone}`)));
     const patientId = existingPatient?.id ?? null;
 
     [conv] = await db.insert(conversationsTable).values({
@@ -190,6 +195,15 @@ router.post("/conversations/incoming", async (req, res): Promise<void> => {
       lastMessage: message,
       lastMessageAt: new Date(),
     }).returning();
+  } else {
+    [conv] = allConvs;
+    if (allConvs.length > 1) {
+      const toRemove = allConvs.slice(1);
+      for (const rem of toRemove) {
+        await db.update(messagesTable).set({ conversationId: conv.id }).where(eq(messagesTable.conversationId, rem.id));
+        await db.delete(conversationsTable).where(eq(conversationsTable.id, rem.id));
+      }
+    }
   }
 
   // Guardar mensaje entrante
@@ -208,7 +222,9 @@ router.post("/conversations/incoming", async (req, res): Promise<void> => {
 
   // Refresh conversation data to ensure we have the most up-to-date AI mode
   const [latestConv] = await db.select().from(conversationsTable).where(eq(conversationsTable.id, conv.id));
-  const aiEnabled = latestConv?.aiMode;
+  const [settings] = await db.select().from(settingsTable).limit(1);
+  const globalBotEnabled = settings?.aiBotEnabled ?? true;
+  const aiEnabled = latestConv?.aiMode === true && globalBotEnabled === true;
 
   if (!aiEnabled) {
     res.status(201).json({ conversation: conv, aiResponse: null });

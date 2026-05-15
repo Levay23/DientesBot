@@ -226,8 +226,18 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo): Promise<void> 
     msg.message?.imageMessage?.caption ??
     "";
 
-  // Si es audio, responder amablemente y salir
+  // Si es audio, responder amablemente y salir si la IA está activa
   if (isAudio) {
+    const globalBotEnabled = await syncBotEnabled();
+    const [existingConv] = await db.select().from(conversationsTable)
+      .where(or(eq(conversationsTable.phone, formattedPhone), eq(conversationsTable.phone, phone)))
+      .orderBy(sql`${conversationsTable.lastMessageAt} desc nulls last`);
+
+    if (!globalBotEnabled || (existingConv && !existingConv.aiMode)) {
+      logger.info({ formattedPhone }, "Audio recibido pero IA desactivada, ignorando respuesta automática");
+      return;
+    }
+
     logger.info({ jid }, "Audio recibido — respondiendo con mensaje de texto");
     const audioReplies = [
       "¡Buen día! 😊 En Dientes Fijos Medellín solo podemos recibir mensajes de texto por el momento. ¿Me podría escribir su consulta? Con mucho gusto le ayudaremos 🦷✨",
@@ -253,12 +263,15 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo): Promise<void> 
 
 
   try {
-    let [conv] = await db.select().from(conversationsTable)
-      .where(eq(conversationsTable.phone, formattedPhone));
+    // Buscar todas las conversaciones posibles (con o sin +) para evitar duplicados
+    const allConvs = await db.select().from(conversationsTable)
+      .where(or(eq(conversationsTable.phone, formattedPhone), eq(conversationsTable.phone, phone)))
+      .orderBy(sql`${conversationsTable.lastMessageAt} desc nulls last`);
 
-    if (!conv) {
+    let conv;
+    if (allConvs.length === 0) {
       const [existingPatient] = await db.select().from(patientsTable)
-        .where(eq(patientsTable.phone, formattedPhone));
+        .where(or(eq(patientsTable.phone, formattedPhone), eq(patientsTable.phone, phone)));
 
       [conv] = await db.insert(conversationsTable).values({
         patientId: existingPatient?.id ?? null,
@@ -271,6 +284,17 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo): Promise<void> 
         lastMessage: text,
         lastMessageAt: new Date(),
       }).returning();
+    } else {
+      [conv] = allConvs;
+      // Si hay duplicados, fusionarlos para que el usuario siempre vea lo mismo
+      if (allConvs.length > 1) {
+        logger.warn({ phone: formattedPhone, count: allConvs.length }, "Fusionando conversaciones duplicadas...");
+        const toRemove = allConvs.slice(1);
+        for (const rem of toRemove) {
+          await db.update(messagesTable).set({ conversationId: conv.id }).where(eq(messagesTable.conversationId, rem.id));
+          await db.delete(conversationsTable).where(eq(conversationsTable.id, rem.id));
+        }
+      }
     }
 
     await db.insert(messagesTable).values({
@@ -289,7 +313,9 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo): Promise<void> 
     // Refresh conversation data to ensure we have the most up-to-date AI mode
     const [latestConv] = await db.select().from(conversationsTable).where(eq(conversationsTable.id, conv.id));
     const globalBotEnabled = await syncBotEnabled();
-    const aiEnabled = latestConv?.aiMode && globalBotEnabled;
+    const aiEnabled = latestConv?.aiMode === true && globalBotEnabled === true;
+
+    logger.info({ phone: formattedPhone, aiMode: latestConv?.aiMode, globalBotEnabled, aiEnabled }, "Evaluando si responder con IA");
 
     if (aiEnabled) {
       try {

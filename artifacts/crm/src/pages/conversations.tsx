@@ -36,12 +36,22 @@ export default function Conversations() {
   const queryClient = useQueryClient();
 
 
+  const [lastSynced, setLastSynced] = useState<Date>(new Date());
   const params = { search: search || undefined };
   const { data: conversations, isLoading } = useListConversations(params, {
-    query: { queryKey: getListConversationsQueryKey(params), refetchInterval: 3000 }
+    query: { 
+      queryKey: getListConversationsQueryKey(params), 
+      refetchInterval: 2500,
+      onSuccess: () => setLastSynced(new Date())
+    }
   });
   const { data: detail, isLoading: detailLoading } = useGetConversation(selectedId!, {
-    query: { enabled: !!selectedId, queryKey: getGetConversationQueryKey(selectedId!), refetchInterval: 2000 }
+    query: { 
+      enabled: !!selectedId, 
+      queryKey: getGetConversationQueryKey(selectedId!), 
+      refetchInterval: 1500,
+      onSuccess: () => setLastSynced(new Date())
+    }
   });
   const sendMessage = useSendMessage();
   const setMode = useSetConversationMode();
@@ -84,7 +94,13 @@ export default function Conversations() {
         {/* Lista de conversaciones */}
         <div className="w-80 flex-shrink-0 bg-card/80 border-r border-border/50 flex flex-col">
           <div className="p-4 border-b border-border/50">
-            <h2 className="text-lg font-semibold mb-3">Chat Center</h2>
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-lg font-semibold">Chat Center</h2>
+              <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground uppercase tracking-widest">
+                <span className="w-1 h-1 rounded-full bg-green-500 animate-pulse" />
+                Sincronizado {lastSynced.toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+              </div>
+            </div>
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <Input placeholder="Buscar..." className="pl-9 bg-background border-border h-9" value={search} onChange={e => setSearch(e.target.value)} />
