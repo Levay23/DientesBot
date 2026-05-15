@@ -76,7 +76,7 @@ router.post("/clinical/quotations", async (req, res): Promise<void> => {
             const imageBuffer = await generateQuotationImage({
               clinicName,
               patientName: patient.name,
-              items: data.items,
+              items: data.items.map(i => ({ ...i, quantity: i.quantity ?? 1 })),
               total: data.total
             });
 
@@ -129,7 +129,7 @@ router.patch("/clinical/quotations/:id", async (req, res): Promise<void> => {
             const imageBuffer = await generateQuotationImage({
               clinicName,
               patientName: patient.name,
-              items: quotation.items,
+              items: (quotation.items as any[]).map(i => ({ ...i, quantity: i.quantity ?? 1 })),
               total: quotation.total
             });
 

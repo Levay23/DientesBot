@@ -10,7 +10,11 @@ let fontLoaded = false;
 async function ensureFontLoaded() {
   if (fontLoaded) return;
   try {
-    const font = PImage.registerFont(path.join(__dirname, "assets/font.ttf"), "StandardFont");
+    let fontPath = path.join(__dirname, "assets/font.ttf");
+    if (!fs.existsSync(fontPath)) {
+      fontPath = path.join(__dirname, "../assets/font.ttf");
+    }
+    const font = PImage.registerFont(fontPath, "StandardFont");
     await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => reject(new Error("Font loading timeout")), 5000);
       (font as any).load(() => {
@@ -49,26 +53,36 @@ export async function generateQuotationImage(data: {
   ctx.fillStyle = "#0f172a";
   ctx.fillRect(0, 0, width, 150);
 
-  // Draw Logo if exists - in production it will be in dist/public/
+  // Draw Logo if exists
   try {
-    const logoPath = path.join(__dirname, "public/logo.jpg");
+    let logoPath = path.join(__dirname, "public/logo.jpg");
+    if (!fs.existsSync(logoPath)) {
+      // Intentar ruta de desarrollo si no está en dist
+      logoPath = path.join(__dirname, "../../../artifacts/crm/public/logo.jpg");
+    }
+
     if (fs.existsSync(logoPath)) {
        const stream = fs.createReadStream(logoPath);
        const logo = await PImage.decodeJPEGFromStream(stream);
-       // Center logo in header
+       // Dibujar logo con un borde blanco circular simulado o simplemente ajustado
+       ctx.fillStyle = "#ffffff";
+       ctx.fillRect(15, 15, 120, 120);
        ctx.drawImage(logo, 20, 20, 110, 110);
     }
   } catch (e) {
-    // Ignore logo errors
+    logger.warn("No se pudo cargar el logo para el presupuesto");
   }
 
   // Header Text
   ctx.fillStyle = "#ffffff";
-  ctx.font = "32pt StandardFont"; 
+  ctx.font = "28pt StandardFont"; 
+  ctx.fillText("PRESUPUESTO", 160, 75);
+  ctx.font = "18pt StandardFont";
+  ctx.fillText("ODONTOLÓGICO", 160, 105);
   
-  ctx.fillText("PRESUPUESTO ODONTOLÓGICO", 160, 80);
-  ctx.font = "20pt StandardFont";
-  ctx.fillText(data.clinicName, 160, 120);
+  ctx.font = "14pt StandardFont";
+  ctx.fillStyle = "#94a3b8"; // Slate 400
+  ctx.fillText(data.clinicName.toUpperCase(), 160, 135);
 
   // Patient Info
   ctx.fillStyle = "#334155";
@@ -123,23 +137,22 @@ export async function generateQuotationImage(data: {
 
 
   // Export to Buffer
-  const buffer = await PImage.encodeJPEGToStream(img, new (await import("stream")).PassThrough());
-  
-  // Note: some versions of pureimage encodeJPEGToStream return a promise that resolves to the stream
-  // We need to collect the chunks from the stream
   const chunks: any[] = [];
-  const renderStream = await PImage.encodeJPEGToStream(img, new (await import("stream")).PassThrough());
+  const passThrough = new (await import("stream")).PassThrough();
   
   return new Promise((resolve, reject) => {
-    renderStream.on("data", (chunk) => chunks.push(chunk));
-    renderStream.on("end", () => {
+    passThrough.on("data", (chunk: Buffer) => chunks.push(chunk));
+    passThrough.on("end", () => {
       const finalBuffer = Buffer.concat(chunks);
       logger.info({ size: finalBuffer.length }, "Imagen de presupuesto generada exitosamente");
       resolve(finalBuffer);
     });
-    renderStream.on("error", (err) => {
-      logger.error({ err }, "Error en renderStream de pureimage");
+    passThrough.on("error", (err: Error) => {
+      logger.error({ err }, "Error en passThrough de pureimage");
       reject(err);
     });
+
+    // En pureimage, esta función escribe al stream proporcionado
+    PImage.encodeJPEGToStream(img, passThrough).catch(reject);
   });
 }
