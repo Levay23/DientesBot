@@ -244,7 +244,7 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo): Promise<void> 
 
     try {
       logger.info({ jid }, "Audio recibido — descargando y transcribiendo");
-      const buffer = await downloadMediaMessage(msg as WAMessage, "buffer", { }, { logger: logger as any });
+      const buffer = await downloadMediaMessage(msg as WAMessage, "buffer", { }, { logger: logger as any, reuploadRequest: sock?.updateMediaMessage as any });
       const mimetype = msg.message?.audioMessage?.mimetype || "audio/ogg; codecs=opus";
       text = await transcribeAudio(buffer as Buffer, mimetype);
       wasAudio = true;
