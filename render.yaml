@@ -9,7 +9,7 @@ services:
     name: dientesbot-api
     env: node
     plan: free
-    buildCommand: pnpm install && pnpm --filter @workspace/db run push && npx tsx lib/db/src/seed.ts && pnpm --filter @workspace/api-server run build
+    buildCommand: pnpm install && node ./node_modules/.pnpm/ffmpeg-static@5.3.0/node_modules/ffmpeg-static/install.js && pnpm --filter @workspace/db run push && npx tsx lib/db/src/seed.ts && pnpm --filter @workspace/api-server run build
     startCommand: pnpm --filter @workspace/api-server run start
     envVars:
       - key: DATABASE_URL

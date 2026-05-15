@@ -345,13 +345,13 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo): Promise<void> 
       try {
         if (wasAudio) {
           logger.info({ jid }, "Sintetizando audio (TTS) para responder nota de voz");
-          const audioBuffer = await synthesizeAudio(aiText);
+          const audioResponse = await synthesizeAudio(aiText);
           await sock.sendMessage(jid, {
-            audio: audioBuffer,
-            mimetype: "audio/ogg; codecs=opus",
+            audio: audioResponse.buffer,
+            mimetype: audioResponse.mimetype,
             ptt: true,
           });
-          logger.info({ jid }, "Respuesta IA enviada exitosamente como nota de voz");
+          logger.info({ jid, mimetype: audioResponse.mimetype }, "Respuesta IA enviada exitosamente como nota de voz");
         } else {
           await sock.sendMessage(jid, { text: aiText });
           logger.info({ jid, aiText }, "Respuesta IA enviada exitosamente como texto");

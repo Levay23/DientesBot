@@ -8,42 +8,53 @@ import { logger } from "./logger";
 if (ffmpegStatic && fs.existsSync(ffmpegStatic)) {
   ffmpeg.setFfmpegPath(ffmpegStatic);
 } else {
-  logger.warn("ffmpeg-static binary not found, falling back to system ffmpeg");
+  logger.warn("ffmpeg-static binary not found, will attempt to use system ffmpeg if available");
 }
 
-export async function synthesizeAudio(text: string): Promise<Buffer> {
+export async function synthesizeAudio(text: string): Promise<{ buffer: Buffer; mimetype: string }> {
   try {
     const tts = new MsEdgeTTS();
-    // Use the highest quality MP3 output from Microsoft as the source
     await tts.setMetadata("es-CO-SalomeNeural", OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
     
-    // Adjust rate and pitch to sound more natural and fluent (human-like)
-    // +15% rate makes it speak slightly faster, avoiding the slow robotic cadence
-    const { audioStream } = tts.toStream(text, { rate: "+15%", pitch: "+2%" });
+    // +10% rate is a good balance between natural and fast
+    const { audioStream } = tts.toStream(text, { rate: "+10%", pitch: "+0%" });
     
-    const chunks: Buffer[] = [];
-    const outStream = new PassThrough();
+    const mp3Buffer = await new Promise<Buffer>((resolve, reject) => {
+      const chunks: Buffer[] = [];
+      audioStream.on("data", (chunk: Buffer) => chunks.push(chunk));
+      audioStream.on("end", () => resolve(Buffer.concat(chunks)));
+      audioStream.on("error", reject);
+    });
 
-    return new Promise((resolve, reject) => {
-      outStream.on("data", (chunk: Buffer) => chunks.push(chunk));
-      outStream.on("end", () => resolve(Buffer.concat(chunks)));
-      outStream.on("error", (err) => {
-        logger.error({ err }, "Error in TTS pass-through stream");
-        reject(err);
+    try {
+      const oggBuffer = await new Promise<Buffer>((resolve, reject) => {
+        const chunks: Buffer[] = [];
+        const outStream = new PassThrough();
+        outStream.on("data", (chunk: Buffer) => chunks.push(chunk));
+        outStream.on("end", () => resolve(Buffer.concat(chunks)));
+        outStream.on("error", reject);
+
+        const inputStream = new PassThrough();
+        inputStream.end(mp3Buffer);
+
+        ffmpeg(inputStream)
+          .audioCodec("libopus")
+          .toFormat("ogg")
+          .on("error", (err) => {
+            logger.warn({ err }, "FFmpeg conversion failed, falling back to raw MP3");
+            reject(err);
+          })
+          .pipe(outStream, { end: true });
       });
 
-      // Pipe the MP3 stream into FFmpeg to convert it to WhatsApp's native OGG Opus format
-      ffmpeg(audioStream)
-        .audioCodec("libopus")
-        .toFormat("ogg")
-        .on("error", (err) => {
-          logger.error({ err }, "FFmpeg error during TTS conversion to OGG Opus");
-          reject(err);
-        })
-        .pipe(outStream, { end: true });
-    });
+      return { buffer: oggBuffer, mimetype: "audio/ogg; codecs=opus" };
+    } catch (ffmpegErr) {
+      // If ffmpeg fails, return the original MP3. WhatsApp Web can play it, 
+      // and we avoid the bot not responding at all.
+      return { buffer: mp3Buffer, mimetype: "audio/mpeg" };
+    }
   } catch (error) {
-    logger.error({ error }, "Error synthesizing and converting audio");
+    logger.error({ error }, "Critical error in synthesizeAudio");
     throw error;
   }
 }
