@@ -427,45 +427,57 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo): Promise<void> 
             const duration = settings?.defaultAppointmentDuration ?? 60;
             const endTime = addMinutes(bookAppointment.startTime, duration);
 
-            // Guard 1: check time slot conflict (another patient already at that time)
-            const slotConflicts = await db.select().from(appointmentsTable)
-              .where(and(
-                eq(appointmentsTable.date, bookAppointment.date),
-                sql`${appointmentsTable.status} != 'cancelled'`,
-              ));
-            const hasSlotConflict = slotConflicts.some(
-              a => !(a.endTime <= bookAppointment.startTime || a.startTime >= endTime)
-            );
+            try {
+              await db.transaction(async (tx) => {
+                // Guard 1: check time slot conflict (another patient already at that time)
+                const slotConflicts = await tx.select().from(appointmentsTable)
+                  .where(and(
+                    eq(appointmentsTable.date, bookAppointment.date),
+                    sql`${appointmentsTable.status} != 'cancelled'`,
+                  ));
+                const hasSlotConflict = slotConflicts.some(
+                  a => !(a.endTime <= bookAppointment.startTime || a.startTime >= endTime)
+                );
 
-            // Guard 2: same patient already has a non-cancelled appointment that day
-            const patientConflicts = await db.select().from(appointmentsTable)
-              .where(and(
-                eq(appointmentsTable.patientId, patientId),
-                eq(appointmentsTable.date, bookAppointment.date),
-                sql`${appointmentsTable.status} != 'cancelled'`,
-              ));
-            const hasPatientConflict = patientConflicts.length > 0;
+                // Guard 2: same patient already has a non-cancelled appointment that day
+                const patientConflicts = await tx.select().from(appointmentsTable)
+                  .where(and(
+                    eq(appointmentsTable.patientId, patientId),
+                    eq(appointmentsTable.date, bookAppointment.date),
+                    sql`${appointmentsTable.status} != 'cancelled'`,
+                  ));
+                const hasPatientConflict = patientConflicts.length > 0;
 
-            if (hasSlotConflict) {
-              logger.warn({ bookAppointment }, "Cita rechazada: franja horaria ya ocupada");
-            } else if (hasPatientConflict) {
-              logger.warn({ patientId, date: bookAppointment.date }, "Cita rechazada: paciente ya tiene cita ese día");
-            } else {
-              const apptNotes = bookAppointment.notes
-                ? `${bookAppointment.notes} | Agendado por WhatsApp Bot`
-                : "Agendado automáticamente por WhatsApp Bot";
+                if (hasSlotConflict) {
+                  throw new Error("slot_conflict");
+                } else if (hasPatientConflict) {
+                  throw new Error("patient_conflict");
+                }
 
-              const [appt] = await db.insert(appointmentsTable).values({
-                patientId,
-                treatment: bookAppointment.treatment || "Consulta general",
-                date: bookAppointment.date,
-                startTime: bookAppointment.startTime,
-                endTime,
-                status: "scheduled",
-                notes: apptNotes,
-              }).returning();
+                const apptNotes = bookAppointment.notes
+                  ? `${bookAppointment.notes} | Agendado por WhatsApp Bot`
+                  : "Agendado automáticamente por WhatsApp Bot";
 
-            logger.info({ appt }, "Cita registrada automáticamente por bot");
+                const [appt] = await tx.insert(appointmentsTable).values({
+                  patientId,
+                  treatment: bookAppointment.treatment || "Consulta general",
+                  date: bookAppointment.date,
+                  startTime: bookAppointment.startTime,
+                  endTime,
+                  status: "scheduled",
+                  notes: apptNotes,
+                }).returning();
+
+                logger.info({ appt }, "Cita registrada automáticamente por bot");
+              });
+            } catch (txErr: any) {
+              if (txErr.message === "slot_conflict") {
+                logger.warn({ bookAppointment }, "Cita rechazada: franja horaria ya ocupada");
+              } else if (txErr.message === "patient_conflict") {
+                logger.warn({ patientId, date: bookAppointment.date }, "Cita rechazada: paciente ya tiene cita ese día");
+              } else {
+                throw txErr; // Re-throw unhandled errors
+              }
             }
           } else {
             logger.warn({ bookAppointment }, "No se pudo registrar cita: paciente no encontrado");

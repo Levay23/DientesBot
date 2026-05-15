@@ -144,18 +144,30 @@ router.post("/appointments", async (req, res): Promise<void> => {
   const date = rawDate instanceof Date ? rawDate.toISOString().slice(0, 10) : String(rawDate);
   const endTime = addMinutes(startTime, duration ?? 60);
 
-  const conflict = await db.select().from(appointmentsTable)
-    .where(and(eq(appointmentsTable.date, date), sql`${appointmentsTable.status} != 'cancelled'`));
-  const hasConflict = conflict.some(a => !(a.endTime <= startTime || a.startTime >= endTime));
-  if (hasConflict) { res.status(409).json({ error: "Time slot conflict" }); return; }
+  try {
+    const appt = await db.transaction(async (tx) => {
+      const conflict = await tx.select().from(appointmentsTable)
+        .where(and(eq(appointmentsTable.date, date), sql`${appointmentsTable.status} != 'cancelled'`));
+      const hasConflict = conflict.some(a => !(a.endTime <= startTime || a.startTime >= endTime));
+      if (hasConflict) {
+        throw new Error("Time slot conflict");
+      }
+      const [newAppt] = await tx.insert(appointmentsTable).values({ patientId, treatment, date, startTime, endTime, notes }).returning();
+      return newAppt;
+    });
 
-  const [appt] = await db.insert(appointmentsTable).values({ patientId, treatment, date, startTime, endTime, notes }).returning();
-  
-  // Sync patient status based on all their appointments
-  await syncPatientStatus(patientId);
+    // Sync patient status based on all their appointments
+    await syncPatientStatus(patientId);
 
-  const [patient] = await db.select().from(patientsTable).where(eq(patientsTable.id, patientId));
-  res.status(201).json({ ...appt, patientName: patient?.name ?? "", patientPhone: patient?.phone ?? "" });
+    const [patient] = await db.select().from(patientsTable).where(eq(patientsTable.id, patientId));
+    res.status(201).json({ ...appt, patientName: patient?.name ?? "", patientPhone: patient?.phone ?? "" });
+  } catch (err: any) {
+    if (err.message === "Time slot conflict") {
+      res.status(409).json({ error: "Time slot conflict" });
+    } else {
+      res.status(500).json({ error: "Internal server error" });
+    }
+  }
 });
 
 router.get("/appointments/:id", async (req, res): Promise<void> => {
