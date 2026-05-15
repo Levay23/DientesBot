@@ -347,7 +347,7 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo): Promise<void> 
           const audioBuffer = await synthesizeAudio(aiText);
           await sock.sendMessage(jid, {
             audio: audioBuffer,
-            mimetype: "audio/mp4",
+            mimetype: "audio/ogg; codecs=opus",
             ptt: true,
           });
           logger.info({ jid }, "Respuesta IA enviada exitosamente como nota de voz");
