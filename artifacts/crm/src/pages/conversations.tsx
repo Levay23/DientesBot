@@ -38,10 +38,10 @@ export default function Conversations() {
 
   const params = { search: search || undefined };
   const { data: conversations, isLoading } = useListConversations(params, {
-    query: { queryKey: getListConversationsQueryKey(params), refetchInterval: 8000 }
+    query: { queryKey: getListConversationsQueryKey(params), refetchInterval: 3000 }
   });
   const { data: detail, isLoading: detailLoading } = useGetConversation(selectedId!, {
-    query: { enabled: !!selectedId, queryKey: getGetConversationQueryKey(selectedId!), refetchInterval: 5000 }
+    query: { enabled: !!selectedId, queryKey: getGetConversationQueryKey(selectedId!), refetchInterval: 2000 }
   });
   const sendMessage = useSendMessage();
   const setMode = useSetConversationMode();

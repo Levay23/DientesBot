@@ -37,10 +37,10 @@ router.get("/whatsapp/bot-status", (_req, res): void => {
   res.json({ botEnabled: getBotEnabled() });
 });
 
-router.post("/whatsapp/bot-toggle", (req, res): void => {
+router.post("/whatsapp/bot-toggle", async (req, res): Promise<void> => {
   const { enabled } = req.body as { enabled?: boolean };
   const newState = typeof enabled === "boolean" ? enabled : !getBotEnabled();
-  setBotEnabled(newState);
+  await setBotEnabled(newState);
   res.json({ botEnabled: newState });
 });
 

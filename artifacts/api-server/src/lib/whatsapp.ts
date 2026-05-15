@@ -51,13 +51,32 @@ export function getWAState(): WAState {
   return { ..._state };
 }
 
+export async function syncBotEnabled(enabled?: boolean): Promise<boolean> {
+  try {
+    if (typeof enabled === "boolean") {
+      await db.update(settingsTable).set({ aiBotEnabled: enabled });
+      _state.botEnabled = enabled;
+      return enabled;
+    } else {
+      const [settings] = await db.select().from(settingsTable).limit(1);
+      if (settings && typeof settings.aiBotEnabled === "boolean") {
+        _state.botEnabled = settings.aiBotEnabled;
+        return settings.aiBotEnabled;
+      }
+    }
+  } catch (err) {
+    logger.error({ err }, "Error sincronizando botEnabled con DB");
+  }
+  return _state.botEnabled;
+}
+
 export function getBotEnabled(): boolean {
   return _state.botEnabled;
 }
 
-export function setBotEnabled(enabled: boolean): void {
-  _state.botEnabled = enabled;
-  logger.info({ botEnabled: enabled }, "Bot IA global toggled");
+export async function setBotEnabled(enabled: boolean): Promise<void> {
+  await syncBotEnabled(enabled);
+  logger.info({ botEnabled: enabled }, "Bot IA global actualizado y persistido");
 }
 
 export async function sendWAMessage(jid: string, text: string): Promise<boolean> {
@@ -269,7 +288,8 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo): Promise<void> 
 
     // Refresh conversation data to ensure we have the most up-to-date AI mode
     const [latestConv] = await db.select().from(conversationsTable).where(eq(conversationsTable.id, conv.id));
-    const aiEnabled = latestConv?.aiMode && _state.botEnabled;
+    const globalBotEnabled = await syncBotEnabled();
+    const aiEnabled = latestConv?.aiMode && globalBotEnabled;
 
     if (aiEnabled) {
       try {
@@ -439,6 +459,7 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo): Promise<void> 
 
 export async function startWhatsApp(): Promise<void> {
   _state.status = "connecting";
+  await syncBotEnabled(); // Initialize from DB
 
   // Auth state persisted in PostgreSQL — survives server restarts
   const { state: authState, saveCreds } = await usePostgresAuthState();
