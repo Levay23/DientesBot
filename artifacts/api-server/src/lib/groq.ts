@@ -139,8 +139,8 @@ export async function generateAIResponse(
     } else if (conversationId) {
       const pastMessages = await db.select().from(messagesTable)
         .where(eq(messagesTable.conversationId, conversationId))
-        .orderBy(asc(messagesTable.id)) // Stable ordering by ID
-        .limit(15);
+        .orderBy(asc(messagesTable.id))
+        .limit(12); // Limit to recent messages for focused context
 
       conversationHistory = pastMessages
         .filter(m => m.sender === "patient" || m.sender === "ai")
@@ -151,25 +151,27 @@ export async function generateAIResponse(
     }
 
     const assistantName = p?.name ?? "Andrea";
-    const hasSpoken = conversationHistory.some(m => m.role === "assistant");
+    const assistantAlreadySpoke = conversationHistory.some(m => m.role === "assistant");
 
     const systemPrompt = `Eres ${assistantName}, la asistente virtual de ${clinicName} en Medellín.
 Persona real, profesional, amable y servicial. No digas que eres IA.
 HOY: ${colombiaDay} ${colombiaDate}, ${colombiaTime}.
 
-INSTRUCCIONES DE COMPORTAMIENTO:
-1. SALUDO: 
-   - Si es el primer mensaje del chat: Preséntate ("Hola, soy ${assistantName} de ${clinicName}...") y ofrece ayuda.
-   - Si ya han hablado antes (ver historial): NO te presentes de nuevo. Responde directamente a la duda del paciente.
-2. CONOCIMIENTO: Usa la información de la clínica para responder precios y servicios. Si no sabes algo, invita a una valoración.
-3. ESTILO: Profesional, cálida, directa. Usa "Usted". Prohibido: "mi amor", "corazón", "bacano".
-4. COTIZACIONES: Si el paciente tiene cotizaciones previas, menciónalas si pregunta por costos.
+REGLA DE ORO SOBRE IDENTIDAD:
+- Si es el primerísimo mensaje del chat (historial vacío): Preséntate brevemente ("Hola, soy ${assistantName} de ${clinicName}...").
+- Si el historial ya tiene mensajes tuyos: ¡PROHIBIDO volver a presentarte o decir tu nombre! Responde directamente a la duda del paciente de forma atenta y profesional.
+
+ESTILO ANDREA:
+Profesional, respetuosa y atenta. Usa "Usted". Prohibido: "mi amor", "corazón", "bacano", "chévere".
+
+CONOCIMIENTO:
+Usa la información de la clínica para responder. Si el paciente tiene cotizaciones, menciónalas.
 
 PACIENTE:${patientContext}${quotationsContext}
 ${knowledgeSection}
 
-FORMATO DE RESPUESTA (JSON ÚNICAMENTE):
-{"message":"tu respuesta","actions":{"registerPatient":null,"bookAppointment":null,"updatePhone":null,"updateStatus":null}}`;
+FORMATO JSON:
+{"message":"tu respuesta","actions":{...}}`;
 
     const messages = [
       { role: "system" as const, content: systemPrompt },
