@@ -2,13 +2,15 @@ import Layout from "@/components/layout";
 import { useListAppointments, useCreateAppointment, useUpdateAppointment, useDeleteAppointment, useListPatients, getListAppointmentsQueryKey } from "@workspace/api-client-react";
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Plus, ChevronLeft, ChevronRight } from "lucide-react";
+import { Plus, ChevronLeft, ChevronRight, Check, ChevronsUpDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Command, CommandInput, CommandEmpty, CommandGroup, CommandItem, CommandList } from "@/components/ui/command";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -67,6 +69,7 @@ export default function Appointments() {
   const [view, setView] = useState<"day" | "week" | "list">("week");
   const [currentDate, setCurrentDate] = useState(new Date());
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [patientOpen, setPatientOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [form, setForm] = useState<AppointmentForm>(emptyForm);
   const queryClient = useQueryClient();
@@ -304,10 +307,49 @@ export default function Appointments() {
                   </Badge>
                 )}
               </div>
-              <Select value={form.patientId} onValueChange={v => setForm(f => ({ ...f, patientId: v }))}>
-                <SelectTrigger className="bg-background"><SelectValue placeholder="Seleccionar paciente" /></SelectTrigger>
-                <SelectContent>{(patients ?? []).map(p => <SelectItem key={p.id} value={String(p.id)}>{p.name}</SelectItem>)}</SelectContent>
-              </Select>
+              <Popover open={patientOpen} onOpenChange={setPatientOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    role="combobox"
+                    aria-expanded={patientOpen}
+                    className="w-full justify-between bg-background font-normal"
+                  >
+                    {form.patientId
+                      ? patients?.find((p) => String(p.id) === form.patientId)?.name
+                      : "Seleccionar paciente..."}
+                    <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-[400px] p-0" align="start">
+                  <Command>
+                    <CommandInput placeholder="Buscar paciente..." />
+                    <CommandList>
+                      <CommandEmpty>No se encontró ningún paciente.</CommandEmpty>
+                      <CommandGroup>
+                        {(patients ?? []).map((p) => (
+                          <CommandItem
+                            key={p.id}
+                            value={p.name}
+                            onSelect={() => {
+                              setForm(f => ({ ...f, patientId: String(p.id) }));
+                              setPatientOpen(false);
+                            }}
+                          >
+                            <Check
+                              className={cn(
+                                "mr-2 h-4 w-4",
+                                form.patientId === String(p.id) ? "opacity-100" : "opacity-0"
+                              )}
+                            />
+                            {p.name}
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
             </div>
             <div className="col-span-2 space-y-1">
               <Label>Tratamiento *</Label>
