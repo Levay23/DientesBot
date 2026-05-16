@@ -38,6 +38,17 @@ function getColombiaNow(): { dateStr: string; timeStr: string; dayName: string }
   return { dateStr, timeStr, dayName };
 }
 
+function to12h(time24: string): string {
+  if (!time24) return "";
+  const [hStr, mStr] = time24.split(":");
+  let h = parseInt(hStr, 10);
+  const m = mStr ?? "00";
+  const ampm = h >= 12 ? "p.m." : "a.m.";
+  if (h === 0) h = 12;
+  else if (h > 12) h -= 12;
+  return `${h}:${m} ${ampm}`;
+}
+
 export async function generateAIResponse(
   conversationId: number | null,
   patientMessage: string,
@@ -49,14 +60,17 @@ export async function generateAIResponse(
       db.select().from(aiPersonalityTable).limit(1),
       db.select().from(aiKnowledgeTable).where(eq(aiKnowledgeTable.active, true)),
       db.select().from(treatmentsTable).where(eq(treatmentsTable.active, true)),
-    ]);
+    ]).catch(err => {
+      logger.error({ err }, "Error cargando datos de DB para AI");
+      return [[], [], [], []];
+    });
 
-    const cfg = settings[0];
-    const p = personality[0];
+    const cfg = settings?.[0];
+    const p = personality?.[0];
     const clinicName = cfg?.clinicName ?? "Dientes Fijos Medellín";
     const { dateStr, timeStr, dayName } = getColombiaNow();
 
-    let patientDataStr = "NO IDENTIFICADO (Pregúntale su nombre o teléfono si es necesario).";
+    let patientDataStr = "PACIENTE NO IDENTIFICADO.";
     let historyContext = "";
 
     if (conversationId && !opts.testMode) {
@@ -80,10 +94,10 @@ export async function generateAIResponse(
           const p = patient[0];
           patientDataStr = `PACIENTE: ${p.name} | Tel: ${p.phone} | Estado: ${p.status}`;
           if (quotes.length > 0) {
-            historyContext += "\nCOTIZACIONES EN EL PANEL:\n" + quotes.map(q => `- #${q.id}: ${q.status}, Total: $${Number(q.total).toLocaleString()} pesos`).join("\n");
+            historyContext += "\nCOTIZACIONES DEL PACIENTE:\n" + quotes.map(q => `- #${q.id}: ${q.status}, Total: $${Number(q.total).toLocaleString()} pesos`).join("\n");
           }
           if (appts.length > 0) {
-            historyContext += "\nCITAS EN EL PANEL:\n" + appts.map(a => `- ${a.date}: ${a.treatment} (${a.status})`).join("\n");
+            historyContext += "\nCITAS DEL PACIENTE:\n" + appts.map(a => `- ${a.date}: ${a.treatment} (${a.status})`).join("\n");
           }
         }
       }
@@ -91,6 +105,11 @@ export async function generateAIResponse(
 
     const treatmentsStr = allTreatments.map(t => `- ${t.name}: ${Number(t.price).toLocaleString()} pesos`).join("\n");
     const knowledgeStr = knowledgeEntries.map(e => `[${e.title}]\n${e.content}`).join("\n\n");
+
+    let availableSlotsSection = "";
+    if (opts.availableSlots && opts.availableSlots.length > 0) {
+      availableSlotsSection = `\nHORARIOS DISPONIBLES:\n${opts.availableSlots.map(d => `• ${d.label}: ${d.slots.slice(0, 5).map(s => to12h(s)).join(" / ")}`).join("\n")}`;
+    }
 
     let conversationHistory: { role: "user" | "assistant"; content: string }[] = [];
     if (opts.history) {
@@ -101,39 +120,44 @@ export async function generateAIResponse(
     }
 
     const assistantName = p?.name ?? "Andrea";
-    const alreadyMet = conversationHistory.some(m => m.role === "assistant");
-
-    const systemPrompt = `Eres ${assistantName}, asistente de ${clinicName}.
+    const systemPrompt = `Eres ${assistantName}, la asistente oficial de ${clinicName} en Medellín. Persona real.
 HOY: ${dayName} ${dateStr}, ${timeStr}.
 
-REGLAS CRÍTICAS DE VERDAD (NO INVENTAR):
-1. PAGOS Y REEMBOLSOS: ¡OJO! NO tienes acceso al historial de pagos ni abonos. Si el paciente pregunta por un pago, abono o reembolso, di que NO puedes verlo y que un asesor humano lo revisará pronto. NUNCA inventes montos de pagos.
-2. CONOCIMIENTO: Solo usa la información que ves abajo. Si no está en el texto, di que no lo sabes.
-3. MONEDA: Solo usa la palabra "pesos". PROHIBIDO símbolo "$" y palabra "dólares".
-4. IDENTIDAD: Si ya has hablado antes (historial no vacío), NO digas tu nombre ni te presentes.
+REGLAS CRÍTICAS:
+1. MONEDA: Usa solo "pesos". NUNCA el símbolo "$" ni la palabra "dólares".
+2. IDENTIDAD: Si hay historial, NO te presentes.
+3. PAGOS: NO tienes acceso a pagos ni reembolsos. Si preguntan por dinero, di que un asesor humano lo revisará. NUNCA inventes pagos.
+4. AGENDAMIENTO: Usa los horarios disponibles de abajo para ofrecer citas.
 
-DATOS DISPONIBLES:
+CONTEXTO DEL PACIENTE:
 ${patientDataStr}${historyContext}
 
-CATÁLOGO DE PRECIOS (Solo para información de servicios):
+CATÁLOGO DE SERVICIOS:
 ${treatmentsStr}
+${availableSlotsSection}
 
 ARTÍCULOS DE AYUDA:
 ${knowledgeStr}
 
-FORMATO JSON:
-{"message":"tu respuesta","actions":{...}}`;
+RESPONDE UNICAMENTE CON JSON:
+{"message":"tu respuesta","actions":{"registerPatient":null,"bookAppointment":null,"updatePhone":null,"updateStatus":null}}`;
 
     const completion = await getGroq().chat.completions.create({
       model: "llama-3.3-70b-versatile",
-      messages: [{ role: "system", content: systemPrompt }, ...conversationHistory.slice(-10), { role: "user", content: patientMessage }],
+      messages: [
+        { role: "system", content: systemPrompt },
+        ...conversationHistory.slice(-12).map(h => ({ role: h.role, content: h.content })),
+        { role: "user", content: patientMessage }
+      ],
       response_format: { type: "json_object" },
       temperature: 0.5,
     });
 
-    const parsed = JSON.parse(completion.choices[0]?.message?.content || "{}");
+    const content = completion.choices[0]?.message?.content || "{}";
+    const parsed = JSON.parse(content);
+
     return {
-      message: parsed.message || "",
+      message: parsed.message || "Lo siento, tuve un problema procesando tu solicitud. ¿En qué puedo ayudarte?",
       actions: {
         registerPatient: parsed.actions?.registerPatient ?? null,
         bookAppointment: parsed.actions?.bookAppointment ?? null,
@@ -142,8 +166,11 @@ FORMATO JSON:
       },
     };
   } catch (err) {
-    logger.error({ err }, "Error AI");
-    throw err;
+    logger.error({ err }, "Error crítico en generateAIResponse");
+    return {
+      message: "Hola, disculpa el inconveniente. Mi sistema está teniendo un pequeño retraso, pero ya estoy aquí. ¿En qué puedo ayudarte?",
+      actions: {}
+    };
   }
 }
 
