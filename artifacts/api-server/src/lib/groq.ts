@@ -1,6 +1,6 @@
 import Groq, { toFile } from "groq-sdk";
 import { db, settingsTable, conversationsTable, messagesTable, patientsTable, aiKnowledgeTable, aiPersonalityTable, quotationsTable } from "@workspace/db";
-import { eq, desc, asc } from "drizzle-orm";
+import { eq, desc, asc, or, ilike } from "drizzle-orm";
 import { logger } from "./logger";
 
 let _groq: Groq | null = null;
@@ -81,34 +81,52 @@ export async function generateAIResponse(
 
     let patientContext = "";
     let quotationsContext = "";
+    let patientFound = false;
 
+    // Logic to find patient by JID or by text if the message looks like a phone/name
     if (conversationId && !opts.testMode) {
       const [conv] = await db.select().from(conversationsTable).where(eq(conversationsTable.id, conversationId));
-      if (conv?.patientId) {
-        const [patient] = await db.select().from(patientsTable).where(eq(patientsTable.id, conv.patientId));
+      let patientId = conv?.patientId;
+
+      // If no patientId, try to find by the message itself (if it looks like a phone number)
+      const potentialPhone = patientMessage.replace(/\D/g, "");
+      if (!patientId && potentialPhone.length >= 7) {
+        const [pByPhone] = await db.select().from(patientsTable).where(or(
+          ilike(patientsTable.phone, `%${potentialPhone}%`),
+          eq(patientsTable.phone, potentialPhone)
+        )).limit(1);
+        if (pByPhone) patientId = pByPhone.id;
+      }
+
+      if (patientId) {
+        const [patient] = await db.select().from(patientsTable).where(eq(patientsTable.id, patientId));
         if (patient) {
+          patientFound = true;
           const firstName = patient.name.split(" ")[0];
-          patientContext = `\nPACIENTE REGISTRADO:\n- Nombre: ${patient.name} (llámalo/a "${firstName}")\n- Teléfono: ${patient.phone}\n- Tratamiento: ${patient.treatment ?? "sin especificar"}\n- Estado: ${patient.status}`;
+          patientContext = `\nPACIENTE IDENTIFICADO:\n- Nombre: ${patient.name} (llámalo/a "${firstName}")\n- Teléfono: ${patient.phone}\n- Tratamiento actual: ${patient.treatment ?? "sin especificar"}\n- Estado: ${patient.status}`;
           
           const quotes = await db.select().from(quotationsTable)
-            .where(eq(quotationsTable.patientId, conv.patientId))
+            .where(eq(quotationsTable.patientId, patientId))
             .orderBy(desc(quotationsTable.createdAt))
             .limit(3);
           
           if (quotes.length > 0) {
-            quotationsContext = "\n━━━ COTIZACIONES VIGENTES ━━━";
+            quotationsContext = "\n━━━ COTIZACIONES ENCONTRADAS ━━━";
             for (const q of quotes) {
               const items = (q.items as any[]).map(it => `- ${it.service}: $${Number(it.price).toLocaleString()}`).join("\n");
-              quotationsContext += `\nCotización #${q.id} (${q.status}):\n${items}\nTOTAL: $${Number(q.total).toLocaleString()}\n`;
+              quotationsContext += `\nPresupuesto #${q.id} (Estado: ${q.status}):\n${items}\nTOTAL: $${Number(q.total).toLocaleString()}\n`;
             }
+            quotationsContext += "Ya que encontraste su cotización, reenvíale estos detalles de forma amable.";
+          } else {
+            quotationsContext = "\n(No se encontraron cotizaciones pendientes para este paciente).";
           }
         }
       }
     }
 
-    // Knowledge Map - Optimized for service discovery
+    // Knowledge filtering
     const KEYWORD_MAP: Record<string, string[]> = {
-      "Odontología General — Precios":       ["resina","obturac","caries","sellante","profilaxis","limpieza","higiene","urgencia","calculo","sarro","general","servicios","ofrecen","hacen","disponibles","ofrece"],
+      "Odontología General — Precios":       ["resina","obturac","caries","sellante","profilaxis","limpieza","higiene","urgencia","calculo","sarro","general","servicios","ofrece","disponibles"],
       "Blanqueamiento Dental — Precios":     ["blanquea","whitening","aclar","diente amarillo","mancha"],
       "Estética Dental — Carillas y Diseño de Sonrisa": ["carilla","diseño de sonrisa","estética","veneers","microdiseño","cerómero","disilicato","sonrisa"],
       "Rehabilitación Oral — Coronas y Prótesis": ["corona","rehabilit","incrustac","nucleo","pilar","puente","recementar","provisional","platino","tradicional","zirconio"],
@@ -117,11 +135,11 @@ export async function generateAIResponse(
       "Cirugía Oral — Precios":              ["cirugia","cirugía","extraccion","extracción","exodoncia","muela del juicio","cordal","frenilect","biopsia","capuchon"],
       "Periodoncia — Encías y Soporte Dental": ["encia","encía","periodont","curetaje","gingivect","reborde","injerto","sangra","piorrhea"],
       "Endodoncia — Tratamiento de Conductos": ["endodoncia","conducto","nervio","pulpa","apice","apicectomia","reabsorcion","canal"],
-      "Ortodoncia — Planes y Precios":       ["ortodoncia","bracket","aligner","retenedor","mordida","dientes chuecos","dientes torcidos","alinear","aparatos","brace"],
-      "Información sobre pagos y política de citas": ["pago","precio","cobro","cuota","financi","cancelar","politica","horario","direccion","ubicacion","costo","valor","cuanto vale","cuánto vale","cuanto cuesta","cuánto cuesta","cotizacion","presupuesto"],
+      "Ortodoncia — Planes y Precios":       ["ortodoncia","bracket","aligner","retenedor","mordida","dientes chuecos","torcidos","alinear","aparatos","brace"],
+      "Información sobre pagos y política de citas": ["pago","precio","cobro","cuota","financi","cancelar","politica","horario","direccion","ubicacion","costo","valor","cuanto vale","cuanto cuesta","cotizacion","presupuesto"],
     };
 
-    const searchText = (patientMessage + " " + (opts.history ?? []).slice(-2).map(m => m.content).join(" ")).toLowerCase();
+    const searchText = (patientMessage + " " + (opts.history ?? []).slice(-3).map(m => m.content).join(" ")).toLowerCase();
     const filteredEntries = knowledgeEntries.filter(entry => {
       if (entry.category === "general") return true;
       const keywords = KEYWORD_MAP[entry.title] ?? [];
@@ -129,9 +147,7 @@ export async function generateAIResponse(
     });
 
     const entriesToUse = filteredEntries.length > 0 ? filteredEntries : knowledgeEntries.filter(e => e.category === "general");
-    const knowledgeSection = entriesToUse.length > 0 
-      ? `\nINFORMACIÓN DE LA CLÍNICA:\n${entriesToUse.map(e => `[${e.title}]\n${e.content}`).join("\n\n")}\n`
-      : "";
+    const knowledgeSection = `\nCONOCIMIENTO CLÍNICA:\n${entriesToUse.map(e => `[${e.title}]\n${e.content}`).join("\n\n")}\n`;
 
     let conversationHistory: { role: "user" | "assistant"; content: string }[] = [];
     if (opts.history) {
@@ -140,47 +156,42 @@ export async function generateAIResponse(
       const pastMessages = await db.select().from(messagesTable)
         .where(eq(messagesTable.conversationId, conversationId))
         .orderBy(asc(messagesTable.id))
-        .limit(12); // Limit to recent messages for focused context
-
-      conversationHistory = pastMessages
-        .filter(m => m.sender === "patient" || m.sender === "ai")
-        .map(m => ({
-          role: m.sender === "patient" ? "user" as const : "assistant" as const,
-          content: m.content,
-        }));
+        .limit(15);
+      conversationHistory = pastMessages.filter(m => m.sender === "patient" || m.sender === "ai")
+        .map(m => ({ role: m.sender === "patient" ? "user" : "assistant", content: m.content }));
     }
 
     const assistantName = p?.name ?? "Andrea";
     const assistantAlreadySpoke = conversationHistory.some(m => m.role === "assistant");
 
     const systemPrompt = `Eres ${assistantName}, la asistente virtual de ${clinicName} en Medellín.
-Persona real, profesional, amable y servicial. No digas que eres IA.
+Persona real, profesional, amable y atenta.
 HOY: ${colombiaDay} ${colombiaDate}, ${colombiaTime}.
 
-REGLA DE ORO SOBRE MONEDA Y PRECIOS:
-- Los precios están SIEMPRE en PESOS COLOMBIANOS (COP). ¡PROHIBIDO usar dólares!
-- Al mencionar un precio, usa el formato: $ [valor] pesos. Ej: $150.000 pesos.
+REGLA DE MONEDA: Solo usa el término "pesos". Ejemplo: $150.000 pesos. NUNCA digas dólares ni pesos colombianos.
 
-REGLA DE ORO SOBRE IDENTIDAD:
-- Si es el primerísimo mensaje del chat (historial vacío): Preséntate brevemente ("Hola, soy ${assistantName} de ${clinicName}...").
-- Si el historial ya tiene mensajes tuyos: ¡PROHIBIDO volver a presentarte o decir tu nombre! Responde directamente.
+REGLA DE IDENTIDAD: Si ya hay historial, NO te presentes. Ve directo a la respuesta.
 
-ESTILO ANDREA:
-Profesional, respetuosa y atenta. Usa "Usted". Prohibido: "mi amor", "corazón", "bacano", "chévere".
-
-CONOCIMIENTO Y COTIZACIONES:
-- Usa la información de la clínica para responder con precisión sobre tratamientos y precios.
-- Si el paciente tiene cotizaciones vigentes (ver abajo), menciónalas de forma atenta si pregunta por costos.
+LÓGICA DE CONVERSACIÓN:
+- Si el paciente te da un número o nombre es porque probablemente lo pediste antes (mira el historial). Úsalo para identificarlo.
+- Si el paciente pide una cotización y aparece como "IDENTIFICADO" abajo, usa los datos de "COTIZACIONES ENCONTRADAS" para responder.
+- Si no está identificado, pídele su nombre o número con amabilidad.
 
 PACIENTE:${patientContext}${quotationsContext}
 ${knowledgeSection}
 
-FORMATO JSON:
-{"message":"tu respuesta","actions":{...}}`;
+ACCIONES DISPONIBLES (JSON):
+- registerPatient: {"name":"Nombre","phone":null,"treatment":"motivo"}
+- bookAppointment: {"date":"YYYY-MM-DD","startTime":"HH:MM","treatment":"motivo","notes":"nota"}
+- updatePhone: {"phone":"numero sin espacios"}
+- updateStatus: {"status":"interested"}
+
+FORMATO DE RESPUESTA (JSON):
+{"message":"tu respuesta","actions":{"registerPatient":null,"bookAppointment":null,"updatePhone":null,"updateStatus":null}}`;
 
     const messages = [
       { role: "system" as const, content: systemPrompt },
-      ...conversationHistory.slice(-10),
+      ...conversationHistory.slice(-15),
       { role: "user" as const, content: patientMessage },
     ];
 
@@ -204,7 +215,7 @@ FORMATO JSON:
       },
     };
   } catch (err) {
-    logger.error({ err }, "Error en AI");
+    logger.error({ err }, "Error AI");
     throw err;
   }
 }
