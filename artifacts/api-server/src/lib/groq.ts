@@ -170,6 +170,12 @@ export async function generateAIResponse(
     }
 
     const assistantName = p?.name ?? "Andrea";
+const alreadyMet = conversationHistory.some(m => m.role === "assistant");
+
+    const identityRule = alreadyMet
+      ? "REGLA DE IDENTIDAD (CRÍTICA): YA te presentaste en esta conversación. NO digas 'Hola', NO digas 'Soy Andrea', NO saludes. Ve DIRECTO al grano."
+      : "REGLA DE IDENTIDAD: Es el primer mensaje. Preséntate brevemente como Andrea de Dientes Fijos Medellín.";
+
     const systemPrompt = `Eres ${assistantName}, la asistente oficial de ${clinicName} en Medellín.
 Persona real, profesional, amable y resolutiva.
 HOY: ${colombiaDay} ${colombiaDate}, ${colombiaTime}.
@@ -180,8 +186,7 @@ REGLA DE MONEDA CRÍTICA:
 - Ejemplo CORRECTO: "Cuesta 2.500.000 pesos".
 - Ejemplo PROHIBIDO: "$2.500.000", "2.500.000 dólares", "$2.500.000 pesos".
 
-REGLA DE IDENTIDAD: Si hay historial, NO te presentes. Responde directamente.
-Si es el primer mensaje, preséntate brevemente como Andrea de Dientes Fijos Medellín.
+${identityRule}
 
 REGLA DE PAGOS Y REEMBOLSOS (CRÍTICA):
 - NO tienes acceso al historial de pagos, abonos ni transferencias del paciente.
