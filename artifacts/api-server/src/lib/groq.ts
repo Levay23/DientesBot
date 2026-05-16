@@ -60,17 +60,14 @@ export async function generateAIResponse(
       db.select().from(aiPersonalityTable).limit(1),
       db.select().from(aiKnowledgeTable).where(eq(aiKnowledgeTable.active, true)),
       db.select().from(treatmentsTable).where(eq(treatmentsTable.active, true)),
-    ]).catch(err => {
-      logger.error({ err }, "Error cargando datos de DB para AI");
-      return [[], [], [], []];
-    });
+    ]);
 
-    const cfg = settings?.[0];
-    const p = personality?.[0];
+    const cfg = settings[0];
+    const p = personality[0];
     const clinicName = cfg?.clinicName ?? "Dientes Fijos Medellín";
     const { dateStr, timeStr, dayName } = getColombiaNow();
 
-    let patientDataStr = "PACIENTE NO IDENTIFICADO.";
+    let patientDataStr = "";
     let historyContext = "";
 
     if (conversationId && !opts.testMode) {
@@ -92,9 +89,9 @@ export async function generateAIResponse(
 
         if (patient[0]) {
           const p = patient[0];
-          patientDataStr = `PACIENTE: ${p.name} | Tel: ${p.phone} | Estado: ${p.status}`;
+          patientDataStr = `\nDATOS DEL PACIENTE: ${p.name} | Tel: ${p.phone} | Estado: ${p.status}`;
           if (quotes.length > 0) {
-            historyContext += "\nCOTIZACIONES DEL PACIENTE:\n" + quotes.map(q => `- #${q.id}: ${q.status}, Total: $${Number(q.total).toLocaleString()} pesos`).join("\n");
+            historyContext += "\nCOTIZACIONES DEL PACIENTE:\n" + quotes.map(q => `- #${q.id}: ${q.status}, Total: ${Number(q.total).toLocaleString()} pesos`).join("\n");
           }
           if (appts.length > 0) {
             historyContext += "\nCITAS DEL PACIENTE:\n" + appts.map(a => `- ${a.date}: ${a.treatment} (${a.status})`).join("\n");
@@ -116,38 +113,36 @@ export async function generateAIResponse(
       conversationHistory = opts.history;
     } else if (conversationId) {
       const past = await db.select().from(messagesTable).where(eq(messagesTable.conversationId, conversationId)).orderBy(asc(messagesTable.id)).limit(15);
-      conversationHistory = past.filter(m => m.sender === "patient" || m.sender === "ai").map(m => ({ role: m.sender === "patient" ? "user" : "assistant", content: m.content }));
+      conversationHistory = past.filter(m => m.sender === "patient" || m.sender === "ai").map(m => ({ role: m.sender === "patient" ? "user" as const : "assistant" as const, content: m.content }));
     }
 
     const assistantName = p?.name ?? "Andrea";
-    const systemPrompt = `Eres ${assistantName}, la asistente oficial de ${clinicName} en Medellín. Persona real.
+    const assistantAlreadySpoke = conversationHistory.some(m => m.role === "assistant");
+
+    const systemPrompt = `Eres ${assistantName}, la asistente oficial de ${clinicName} en Medellín.
 HOY: ${dayName} ${dateStr}, ${timeStr}.
 
-REGLAS CRÍTICAS:
+REGLAS:
 1. MONEDA: Usa solo "pesos". NUNCA el símbolo "$" ni la palabra "dólares".
-2. IDENTIDAD: Si hay historial, NO te presentes.
-3. PAGOS: NO tienes acceso a pagos ni reembolsos. Si preguntan por dinero, di que un asesor humano lo revisará. NUNCA inventes pagos.
-4. AGENDAMIENTO: Usa los horarios disponibles de abajo para ofrecer citas.
+2. IDENTIDAD: Si el historial ya tiene mensajes tuyos (asistente), NO te presentes de nuevo.
+3. PAGOS: NO tienes acceso a pagos ni reembolsos. Si preguntan por dinero, diles que un asesor humano lo revisará.
 
-CONTEXTO DEL PACIENTE:
-${patientDataStr}${historyContext}
-
-CATÁLOGO DE SERVICIOS:
+CONTEXTO:${patientDataStr}${historyContext}
+SERVICIOS:
 ${treatmentsStr}
 ${availableSlotsSection}
-
-ARTÍCULOS DE AYUDA:
+CONOCIMIENTO:
 ${knowledgeStr}
 
-RESPONDE UNICAMENTE CON JSON:
+RESPONDE EN JSON:
 {"message":"tu respuesta","actions":{"registerPatient":null,"bookAppointment":null,"updatePhone":null,"updateStatus":null}}`;
 
     const completion = await getGroq().chat.completions.create({
       model: "llama-3.3-70b-versatile",
       messages: [
-        { role: "system", content: systemPrompt },
-        ...conversationHistory.slice(-12).map(h => ({ role: h.role, content: h.content })),
-        { role: "user", content: patientMessage }
+        { role: "system" as const, content: systemPrompt },
+        ...conversationHistory.slice(-10),
+        { role: "user" as const, content: patientMessage }
       ],
       response_format: { type: "json_object" },
       temperature: 0.5,
@@ -157,7 +152,7 @@ RESPONDE UNICAMENTE CON JSON:
     const parsed = JSON.parse(content);
 
     return {
-      message: parsed.message || "Lo siento, tuve un problema procesando tu solicitud. ¿En qué puedo ayudarte?",
+      message: parsed.message || "",
       actions: {
         registerPatient: parsed.actions?.registerPatient ?? null,
         bookAppointment: parsed.actions?.bookAppointment ?? null,
@@ -166,11 +161,8 @@ RESPONDE UNICAMENTE CON JSON:
       },
     };
   } catch (err) {
-    logger.error({ err }, "Error crítico en generateAIResponse");
-    return {
-      message: "Hola, disculpa el inconveniente. Mi sistema está teniendo un pequeño retraso, pero ya estoy aquí. ¿En qué puedo ayudarte?",
-      actions: {}
-    };
+    logger.error({ err }, "Error en AI");
+    throw err;
   }
 }
 
