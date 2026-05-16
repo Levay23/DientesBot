@@ -218,8 +218,16 @@ FORMATO JSON:
       temperature: 0.6,
     });
 
-    const rawContent = completion.choices[0]?.message?.content?.trim() ?? "";
-    const parsed = JSON.parse(rawContent);
+    const rawContent = completion.choices[0]?.message?.content?.trim() ?? "{}";
+    
+    // Robust JSON extraction to prevent SyntaxError if the LLM adds markdown or text
+    let jsonStr = rawContent;
+    const jsonMatch = rawContent.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      jsonStr = jsonMatch[0];
+    }
+    
+    const parsed = JSON.parse(jsonStr);
 
     return {
       message: parsed.message || "",
