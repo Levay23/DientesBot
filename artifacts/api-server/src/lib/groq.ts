@@ -1,6 +1,6 @@
 import Groq, { toFile } from "groq-sdk";
-import { db, settingsTable, conversationsTable, messagesTable, patientsTable, aiKnowledgeTable, aiPersonalityTable, quotationsTable } from "@workspace/db";
-import { eq, desc, asc, or, ilike } from "drizzle-orm";
+import { db, settingsTable, conversationsTable, messagesTable, patientsTable, aiKnowledgeTable, aiPersonalityTable, quotationsTable, appointmentsTable, treatmentsTable } from "@workspace/db";
+import { eq, desc, asc, or, ilike, and, gte } from "drizzle-orm";
 import { logger } from "./logger";
 
 let _groq: Groq | null = null;
@@ -68,10 +68,11 @@ export async function generateAIResponse(
   opts: AIOptions = {}
 ): Promise<AIResponse> {
   try {
-    const [settings, personality, knowledgeEntries] = await Promise.all([
+    const [settings, personality, knowledgeEntries, allTreatments] = await Promise.all([
       db.select().from(settingsTable).limit(1),
       db.select().from(aiPersonalityTable).limit(1),
       db.select().from(aiKnowledgeTable).where(eq(aiKnowledgeTable.active, true)).orderBy(aiKnowledgeTable.category),
+      db.select().from(treatmentsTable).where(eq(treatmentsTable.active, true)),
     ]);
 
     const cfg = settings[0];
@@ -80,15 +81,12 @@ export async function generateAIResponse(
     const { dateStr: colombiaDate, timeStr: colombiaTime, dayName: colombiaDay } = getColombiaNow();
 
     let patientContext = "";
-    let quotationsContext = "";
-    let patientFound = false;
+    let dataContext = "";
 
-    // Logic to find patient by JID or by text if the message looks like a phone/name
     if (conversationId && !opts.testMode) {
       const [conv] = await db.select().from(conversationsTable).where(eq(conversationsTable.id, conversationId));
       let patientId = conv?.patientId;
 
-      // If no patientId, try to find by the message itself (if it looks like a phone number)
       const potentialPhone = patientMessage.replace(/\D/g, "");
       if (!patientId && potentialPhone.length >= 7) {
         const [pByPhone] = await db.select().from(patientsTable).where(or(
@@ -99,32 +97,42 @@ export async function generateAIResponse(
       }
 
       if (patientId) {
-        const [patient] = await db.select().from(patientsTable).where(eq(patientsTable.id, patientId));
-        if (patient) {
-          patientFound = true;
-          const firstName = patient.name.split(" ")[0];
-          patientContext = `\nPACIENTE IDENTIFICADO:\n- Nombre: ${patient.name} (llámalo/a "${firstName}")\n- Teléfono: ${patient.phone}\n- Tratamiento actual: ${patient.treatment ?? "sin especificar"}\n- Estado: ${patient.status}`;
+        const [patient, quotes, appointments] = await Promise.all([
+          db.select().from(patientsTable).where(eq(patientsTable.id, patientId)).limit(1),
+          db.select().from(quotationsTable).where(eq(quotationsTable.patientId, patientId)).orderBy(desc(quotationsTable.createdAt)).limit(3),
+          db.select().from(appointmentsTable).where(eq(appointmentsTable.patientId, patientId)).orderBy(desc(appointmentsTable.date)).limit(5),
+        ]);
+
+        if (patient[0]) {
+          const pData = patient[0];
+          const firstName = pData.name.split(" ")[0];
+          patientContext = `\nPACIENTE ENCONTRADO:\n- Nombre: ${pData.name} (llámalo/a "${firstName}")\n- Teléfono: ${pData.phone}\n- Estado: ${pData.status}`;
           
-          const quotes = await db.select().from(quotationsTable)
-            .where(eq(quotationsTable.patientId, patientId))
-            .orderBy(desc(quotationsTable.createdAt))
-            .limit(3);
+          dataContext += "\n━━━ DATOS DEL PANEL ━━━";
           
           if (quotes.length > 0) {
-            quotationsContext = "\n━━━ COTIZACIONES ENCONTRADAS ━━━";
+            dataContext += "\nCOTIZACIONES:";
             for (const q of quotes) {
               const items = (q.items as any[]).map(it => `- ${it.service}: $${Number(it.price).toLocaleString()}`).join("\n");
-              quotationsContext += `\nPresupuesto #${q.id} (Estado: ${q.status}):\n${items}\nTOTAL: $${Number(q.total).toLocaleString()}\n`;
+              dataContext += `\n#${q.id} (${q.status}):\n${items}\nTOTAL: $${Number(q.total).toLocaleString()}\n`;
             }
-            quotationsContext += "Ya que encontraste su cotización, reenvíale estos detalles de forma amable.";
-          } else {
-            quotationsContext = "\n(No se encontraron cotizaciones pendientes para este paciente).";
+          }
+
+          if (appointments.length > 0) {
+            dataContext += "\nCITAS RECIENTES:";
+            for (const a of appointments) {
+              dataContext += `\n- ${a.date} ${to12h(a.startTime)}: ${a.treatment} (${a.status})`;
+            }
           }
         }
       }
     }
 
-    // Knowledge filtering
+    const treatmentsContext = allTreatments.length > 0 
+      ? `\nLISTADO DE TRATAMIENTOS Y PRECIOS BASE:\n${allTreatments.map(t => `- ${t.name}: $${Number(t.price).toLocaleString()}`).join("\n")}\n`
+      : "";
+
+    // Knowledge Map
     const KEYWORD_MAP: Record<string, string[]> = {
       "Odontología General — Precios":       ["resina","obturac","caries","sellante","profilaxis","limpieza","higiene","urgencia","calculo","sarro","general","servicios","ofrece","disponibles"],
       "Blanqueamiento Dental — Precios":     ["blanquea","whitening","aclar","diente amarillo","mancha"],
@@ -147,7 +155,7 @@ export async function generateAIResponse(
     });
 
     const entriesToUse = filteredEntries.length > 0 ? filteredEntries : knowledgeEntries.filter(e => e.category === "general");
-    const knowledgeSection = `\nCONOCIMIENTO CLÍNICA:\n${entriesToUse.map(e => `[${e.title}]\n${e.content}`).join("\n\n")}\n`;
+    const knowledgeSection = `\nARTÍCULOS DE AYUDA:\n${entriesToUse.map(e => `[${e.title}]\n${e.content}`).join("\n\n")}\n`;
 
     let conversationHistory: { role: "user" | "assistant"; content: string }[] = [];
     if (opts.history) {
@@ -162,22 +170,20 @@ export async function generateAIResponse(
     }
 
     const assistantName = p?.name ?? "Andrea";
-    const assistantAlreadySpoke = conversationHistory.some(m => m.role === "assistant");
-
-    const systemPrompt = `Eres ${assistantName}, la asistente virtual de ${clinicName} en Medellín.
-Persona real, profesional, amable y atenta.
+    const systemPrompt = `Eres ${assistantName}, la asistente oficial de ${clinicName} en Medellín.
+Persona real, profesional, amable y resolutiva.
 HOY: ${colombiaDay} ${colombiaDate}, ${colombiaTime}.
 
-REGLA DE MONEDA: Solo usa el término "pesos". Ejemplo: $150.000 pesos. NUNCA digas dólares ni pesos colombianos.
+REGLA DE MONEDA: Solo usa "pesos" (ej: $150.000 pesos). NUNCA digas dólares.
 
-REGLA DE IDENTIDAD: Si ya hay historial, NO te presentes. Ve directo a la respuesta.
+IDENTIDAD: Si hay historial, NO te presentes. Responde directamente.
 
-LÓGICA DE CONVERSACIÓN:
-- Si el paciente te da un número o nombre es porque probablemente lo pediste antes (mira el historial). Úsalo para identificarlo.
-- Si el paciente pide una cotización y aparece como "IDENTIFICADO" abajo, usa los datos de "COTIZACIONES ENCONTRADAS" para responder.
-- Si no está identificado, pídele su nombre o número con amabilidad.
+ACCESO AL PANEL: Tienes acceso total a los datos del paciente (citas, cotizaciones, tratamientos).
+- Si el paciente da un número o nombre, úsalo para identificarlo.
+- Si ya está identificado (ver abajo), responde basándote en su historial.
 
-PACIENTE:${patientContext}${quotationsContext}
+PACIENTE:${patientContext}${dataContext}
+${treatmentsContext}
 ${knowledgeSection}
 
 ACCIONES DISPONIBLES (JSON):
@@ -186,8 +192,8 @@ ACCIONES DISPONIBLES (JSON):
 - updatePhone: {"phone":"numero sin espacios"}
 - updateStatus: {"status":"interested"}
 
-FORMATO DE RESPUESTA (JSON):
-{"message":"tu respuesta","actions":{"registerPatient":null,"bookAppointment":null,"updatePhone":null,"updateStatus":null}}`;
+FORMATO JSON:
+{"message":"tu respuesta","actions":{...}}`;
 
     const messages = [
       { role: "system" as const, content: systemPrompt },
