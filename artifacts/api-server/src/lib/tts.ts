@@ -16,8 +16,8 @@ export async function synthesizeAudio(text: string): Promise<{ buffer: Buffer; m
     const tts = new MsEdgeTTS();
     await tts.setMetadata("es-CO-SalomeNeural", OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
     
-    // Use default rate and pitch for maximum naturalness
-    const { audioStream } = tts.toStream(text, { rate: "+0%", pitch: "+0%" });
+    // Slightly increased rate (+6%) for a more agile but natural conversation
+    const { audioStream } = tts.toStream(text, { rate: "+6%", pitch: "+0%" });
     
     const mp3Buffer = await new Promise<Buffer>((resolve, reject) => {
       const chunks: Buffer[] = [];
