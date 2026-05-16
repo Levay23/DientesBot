@@ -55,12 +55,24 @@ export async function generateAIResponse(
   opts: AIOptions = {}
 ): Promise<AIResponse> {
   try {
-    const [settings, personality, knowledgeEntries, allTreatments] = await Promise.all([
-      db.select().from(settingsTable).limit(1),
-      db.select().from(aiPersonalityTable).limit(1),
-      db.select().from(aiKnowledgeTable).where(eq(aiKnowledgeTable.active, true)),
-      db.select().from(treatmentsTable).where(eq(treatmentsTable.active, true)),
-    ]);
+    let settings: any[] = [];
+    let personality: any[] = [];
+    let knowledgeEntries: any[] = [];
+    let allTreatments: any[] = [];
+
+    if (!opts.testMode) {
+      [settings, personality, knowledgeEntries, allTreatments] = await Promise.all([
+        db.select().from(settingsTable).limit(1),
+        db.select().from(aiPersonalityTable).limit(1),
+        db.select().from(aiKnowledgeTable).where(eq(aiKnowledgeTable.active, true)),
+        db.select().from(treatmentsTable).where(eq(treatmentsTable.active, true)),
+      ]);
+    } else {
+      // Mock data for testMode
+      settings = [{ clinicName: "Dientes Fijos Medellín" }];
+      knowledgeEntries = [{ title: "General", content: "Clínica dental en Medellín." }];
+      allTreatments = [{ name: "Blanqueamiento", price: 450000 }, { name: "Limpieza", price: 150000 }];
+    }
 
     const cfg = settings[0];
     const p = personality[0];
@@ -71,32 +83,36 @@ export async function generateAIResponse(
     let historyContext = "";
 
     if (conversationId && !opts.testMode) {
-      const [conv] = await db.select().from(conversationsTable).where(eq(conversationsTable.id, conversationId));
-      let pId = conv?.patientId;
+      try {
+        const [conv] = await db.select().from(conversationsTable).where(eq(conversationsTable.id, conversationId));
+        let pId = conv?.patientId;
 
-      const phoneInMsg = patientMessage.replace(/\D/g, "");
-      if (!pId && phoneInMsg.length >= 7) {
-        const [found] = await db.select().from(patientsTable).where(or(ilike(patientsTable.phone, `%${phoneInMsg}%`), eq(patientsTable.phone, phoneInMsg))).limit(1);
-        if (found) pId = found.id;
-      }
+        const phoneInMsg = patientMessage.replace(/\D/g, "");
+        if (!pId && phoneInMsg.length >= 7) {
+          const [found] = await db.select().from(patientsTable).where(or(ilike(patientsTable.phone, `%${phoneInMsg}%`), eq(patientsTable.phone, phoneInMsg))).limit(1);
+          if (found) pId = found.id;
+        }
 
-      if (pId) {
-        const [patient, quotes, appts] = await Promise.all([
-          db.select().from(patientsTable).where(eq(patientsTable.id, pId)).limit(1),
-          db.select().from(quotationsTable).where(eq(quotationsTable.patientId, pId)).orderBy(desc(quotationsTable.createdAt)).limit(3),
-          db.select().from(appointmentsTable).where(eq(appointmentsTable.patientId, pId)).orderBy(desc(appointmentsTable.date)).limit(5),
-        ]);
+        if (pId) {
+          const [patient, quotes, appts] = await Promise.all([
+            db.select().from(patientsTable).where(eq(patientsTable.id, pId)).limit(1),
+            db.select().from(quotationsTable).where(eq(quotationsTable.patientId, pId)).orderBy(desc(quotationsTable.createdAt)).limit(3),
+            db.select().from(appointmentsTable).where(eq(appointmentsTable.patientId, pId)).orderBy(desc(appointmentsTable.date)).limit(5),
+          ]);
 
-        if (patient[0]) {
-          const p = patient[0];
-          patientDataStr = `\nDATOS DEL PACIENTE: ${p.name} | Tel: ${p.phone} | Estado: ${p.status}`;
-          if (quotes.length > 0) {
-            historyContext += "\nCOTIZACIONES DEL PACIENTE:\n" + quotes.map(q => `- #${q.id}: ${q.status}, Total: ${Number(q.total).toLocaleString()} pesos`).join("\n");
-          }
-          if (appts.length > 0) {
-            historyContext += "\nCITAS DEL PACIENTE:\n" + appts.map(a => `- ${a.date}: ${a.treatment} (${a.status})`).join("\n");
+          if (patient[0]) {
+            const pData = patient[0];
+            patientDataStr = `\nDATOS DEL PACIENTE: ${pData.name} | Tel: ${pData.phone} | Estado: ${pData.status}`;
+            if (quotes.length > 0) {
+              historyContext += "\nCOTIZACIONES DEL PACIENTE:\n" + quotes.map(q => `- #${q.id}: ${q.status}, Total: ${Number(q.total).toLocaleString()} pesos`).join("\n");
+            }
+            if (appts.length > 0) {
+              historyContext += "\nCITAS DEL PACIENTE:\n" + appts.map(a => `- ${a.date}: ${a.treatment} (${a.status})`).join("\n");
+            }
           }
         }
+      } catch (dbErr) {
+        logger.error({ dbErr }, "Error consultando datos específicos de paciente");
       }
     }
 
@@ -111,21 +127,23 @@ export async function generateAIResponse(
     let conversationHistory: { role: "user" | "assistant"; content: string }[] = [];
     if (opts.history) {
       conversationHistory = opts.history;
-    } else if (conversationId) {
-      const past = await db.select().from(messagesTable).where(eq(messagesTable.conversationId, conversationId)).orderBy(asc(messagesTable.id)).limit(15);
-      conversationHistory = past.filter(m => m.sender === "patient" || m.sender === "ai").map(m => ({ role: m.sender === "patient" ? "user" as const : "assistant" as const, content: m.content }));
+    } else if (conversationId && !opts.testMode) {
+      try {
+        const past = await db.select().from(messagesTable).where(eq(messagesTable.conversationId, conversationId)).orderBy(asc(messagesTable.id)).limit(15);
+        conversationHistory = past.filter(m => m.sender === "patient" || m.sender === "ai").map(m => ({ role: m.sender === "patient" ? "user" as const : "assistant" as const, content: m.content }));
+      } catch (hErr) {
+        logger.error({ hErr }, "Error cargando historial");
+      }
     }
 
     const assistantName = p?.name ?? "Andrea";
-    const assistantAlreadySpoke = conversationHistory.some(m => m.role === "assistant");
-
     const systemPrompt = `Eres ${assistantName}, la asistente oficial de ${clinicName} en Medellín.
 HOY: ${dayName} ${dateStr}, ${timeStr}.
 
 REGLAS:
 1. MONEDA: Usa solo "pesos". NUNCA el símbolo "$" ni la palabra "dólares".
-2. IDENTIDAD: Si el historial ya tiene mensajes tuyos (asistente), NO te presentes de nuevo.
-3. PAGOS: NO tienes acceso a pagos ni reembolsos. Si preguntan por dinero, diles que un asesor humano lo revisará.
+2. IDENTIDAD: Si el historial ya tiene mensajes de asistente, NO te presentes de nuevo.
+3. PAGOS: NO tienes acceso a pagos ni reembolsos. Si preguntan por eso, remítelos a un asesor humano.
 
 CONTEXTO:${patientDataStr}${historyContext}
 SERVICIOS:
@@ -161,7 +179,7 @@ RESPONDE EN JSON:
       },
     };
   } catch (err) {
-    logger.error({ err }, "Error en AI");
+    logger.error({ err }, "Error crítico en AI");
     throw err;
   }
 }
