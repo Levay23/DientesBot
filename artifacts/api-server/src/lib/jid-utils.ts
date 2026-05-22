@@ -52,10 +52,14 @@ export function phoneToJidIfValid(phone: string): string | null {
   return null;
 }
 
-export function resolveOutboundJid(conv: {
-  whatsappJid?: string | null;
-  phone: string;
-}): string | null {
+export function resolveOutboundJid(
+  conv: { whatsappJid?: string | null; phone: string },
+  patientPhone?: string | null,
+): string | null {
   if (conv.whatsappJid?.includes("@")) return conv.whatsappJid;
+  if (patientPhone) {
+    const fromPatient = phoneToJidIfValid(patientPhone);
+    if (fromPatient) return fromPatient;
+  }
   return phoneToJidIfValid(conv.phone);
 }

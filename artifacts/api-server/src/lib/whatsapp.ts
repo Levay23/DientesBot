@@ -16,6 +16,7 @@ import { usePostgresAuthState } from "./postgres-auth-state";
 import { getAvailableSlots } from "./appointment-slots";
 import { processAIActions } from "./ai-actions";
 import { parseIncomingContact, resolveOutboundJid, phoneToJidIfValid } from "./jid-utils";
+import { resolveConversationIdentity, formatColombianPhone, isValidColombianPhone } from "./conversation-patient-sync";
 
 export interface WAState {
   connected: boolean;
@@ -108,8 +109,9 @@ export async function sendWAMessage(jid: string, text: string): Promise<boolean>
 export async function sendMessageToConversation(
   conv: { whatsappJid?: string | null; phone: string },
   text: string,
+  patientPhone?: string | null,
 ): Promise<boolean> {
-  const jid = resolveOutboundJid(conv);
+  const jid = resolveOutboundJid(conv, patientPhone);
   if (!jid) {
     logger.warn({ phone: conv.phone, whatsappJid: conv.whatsappJid }, "No se pudo resolver JID de WhatsApp");
     return false;
@@ -207,19 +209,23 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo): Promise<void> 
 
   try {
     // Buscar todas las conversaciones posibles (con o sin +) para evitar duplicados
+    const identity = await resolveConversationIdentity(formattedPhone, pushName);
+
     const allConvs = await db.select().from(conversationsTable)
-      .where(or(eq(conversationsTable.phone, formattedPhone), eq(conversationsTable.phone, phone)))
+      .where(or(
+        eq(conversationsTable.whatsappJid, whatsappJid),
+        eq(conversationsTable.phone, identity.phone),
+        eq(conversationsTable.phone, formattedPhone),
+        eq(conversationsTable.phone, phone),
+      ))
       .orderBy(sql`${conversationsTable.lastMessageAt} desc nulls last`);
 
     let conv;
     if (allConvs.length === 0) {
-      const [existingPatient] = await db.select().from(patientsTable)
-        .where(or(eq(patientsTable.phone, formattedPhone), eq(patientsTable.phone, phone)));
-
       [conv] = await db.insert(conversationsTable).values({
-        patientId: existingPatient?.id ?? null,
-        patientName: existingPatient?.name ?? pushName,
-        phone: formattedPhone,
+        patientId: identity.patientId,
+        patientName: identity.patientName,
+        phone: identity.phoneIsValid ? identity.phone : formattedPhone,
         whatsappJid,
         status: "active",
         aiMode: true,
@@ -248,14 +254,28 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo): Promise<void> 
       read: false,
     });
 
+    const refreshedIdentity = await resolveConversationIdentity(
+      isValidColombianPhone(formattedPhone) ? formattedPhone : conv.phone,
+      pushName,
+      conv.patientId ?? identity.patientId,
+    );
+
     await db.update(conversationsTable).set({
       lastMessage: text,
       lastMessageAt: new Date(),
       unreadCount: sql`${conversationsTable.unreadCount} + 1`,
       whatsappJid,
-      phone: formattedPhone,
+      patientId: refreshedIdentity.patientId,
+      patientName: refreshedIdentity.patientName,
+      phone: refreshedIdentity.phoneIsValid ? refreshedIdentity.phone : conv.phone,
     }).where(eq(conversationsTable.id, conv.id));
-    conv = { ...conv, whatsappJid, phone: formattedPhone };
+    conv = {
+      ...conv,
+      whatsappJid,
+      patientId: refreshedIdentity.patientId,
+      patientName: refreshedIdentity.patientName,
+      phone: refreshedIdentity.phoneIsValid ? refreshedIdentity.phone : conv.phone,
+    };
 
     // Refresh conversation data to ensure we have the most up-to-date AI mode
     const [latestConv] = await db.select().from(conversationsTable).where(eq(conversationsTable.id, conv.id));

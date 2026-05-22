@@ -14,6 +14,16 @@ import { getAvailableSlots } from "../lib/appointment-slots";
 import { processAIActions } from "../lib/ai-actions";
 import { sendMessageToConversation, getWAState, phoneToJid } from "../lib/whatsapp";
 import { phoneToJidIfValid } from "../lib/jid-utils";
+import {
+  enrichConversationForApi,
+  syncAllConversationsWithPatients,
+  syncConversationWithPatient,
+  resolveConversationIdentity,
+  formatColombianPhone,
+  isClinicPhone,
+  findPatientByPhone,
+  isValidColombianPhone,
+} from "../lib/conversation-patient-sync";
 import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
@@ -32,6 +42,13 @@ router.get("/conversations/stats/unread", async (_req, res): Promise<void> => {
   });
 });
 
+/** Sincroniza todas las conversaciones con la tabla Pacientes. */
+router.post("/conversations/sync-patients", async (_req, res): Promise<void> => {
+  const wa = getWAState();
+  const result = await syncAllConversationsWithPatients(wa.phone);
+  res.json(result);
+});
+
 router.get("/conversations", async (req, res): Promise<void> => {
   const query = ListConversationsQueryParams.safeParse(req.query);
   const conditions: ReturnType<typeof eq>[] = [];
@@ -42,7 +59,20 @@ router.get("/conversations", async (req, res): Promise<void> => {
   const convs = await db.select().from(conversationsTable)
     .where(conditions.length ? and(...conditions) : undefined)
     .orderBy(sql`${conversationsTable.lastMessageAt} desc nulls last`);
-  res.json(convs);
+
+  const enriched = await Promise.all(convs.map(async (conv) => {
+    let patient = null;
+    if (conv.patientId) {
+      const [p] = await db.select().from(patientsTable).where(eq(patientsTable.id, conv.patientId));
+      if (p) patient = { name: p.name, phone: p.phone };
+    } else if (isValidColombianPhone(conv.phone)) {
+      const p = await findPatientByPhone(conv.phone);
+      if (p) patient = { name: p.name, phone: p.phone };
+    }
+    return enrichConversationForApi(conv, patient);
+  }));
+
+  res.json(enriched);
 });
 
 router.get("/conversations/:id", async (req, res): Promise<void> => {
@@ -67,7 +97,12 @@ router.get("/conversations/:id", async (req, res): Promise<void> => {
     .where(and(eq(messagesTable.conversationId, params.data.id), eq(messagesTable.read, false)));
   await db.update(conversationsTable).set({ unreadCount: 0 }).where(eq(conversationsTable.id, params.data.id));
 
-  res.json({ conversation: conv, patient, messages });
+  const enrichedConv = await enrichConversationForApi(
+    conv,
+    patient ? { name: patient.name, phone: patient.phone } : null,
+  );
+
+  res.json({ conversation: enrichedConv, patient, messages });
 });
 
 router.put("/conversations/:id/mode", async (req, res): Promise<void> => {
@@ -228,15 +263,24 @@ router.post("/messages/:conversationId", async (req, res): Promise<void> => {
     lastMessageAt: new Date(),
   }).where(eq(conversationsTable.id, params.data.conversationId));
 
+  let patientPhone: string | null = null;
+  if (conv.patientId) {
+    const [p] = await db.select().from(patientsTable).where(eq(patientsTable.id, conv.patientId));
+    patientPhone = p?.phone ?? null;
+  } else {
+    const p = await findPatientByPhone(conv.phone);
+    if (p) patientPhone = p.phone;
+  }
+
   let sentToWhatsApp = false;
   let whatsappError: string | null = null;
   const waState = getWAState();
   if (!waState.connected) {
     whatsappError = "WhatsApp no está conectado";
-  } else if (!conv.whatsappJid && !conv.phone) {
+  } else if (!conv.whatsappJid && !patientPhone && !conv.phone) {
     whatsappError = "Conversación sin JID de WhatsApp";
   } else {
-    sentToWhatsApp = await sendMessageToConversation(conv, parsed.data.content);
+    sentToWhatsApp = await sendMessageToConversation(conv, parsed.data.content, patientPhone);
     if (!sentToWhatsApp) {
       whatsappError = conv.whatsappJid
         ? "Error al enviar por WhatsApp (revisa los logs del servidor)"
@@ -248,26 +292,55 @@ router.post("/messages/:conversationId", async (req, res): Promise<void> => {
   res.status(201).json({ ...msg, sentToWhatsApp, whatsappError });
 });
 
-/** Repara JID cuando el teléfono guardado es un ID interno de WhatsApp (chat antiguo). */
+/** Repara JID/teléfono vinculando un paciente registrado (body: { patientId } o { phone }). */
 router.post("/conversations/:id/repair-whatsapp", async (req, res): Promise<void> => {
   const id = parseInt(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id, 10);
   if (isNaN(id)) { res.status(400).json({ error: "ID inválido" }); return; }
 
-  const { phone } = req.body as { phone?: string };
+  const { phone, patientId } = req.body as { phone?: string; patientId?: number };
   const wa = getWAState();
-  const targetPhone = phone ?? wa.phone;
-  if (!targetPhone) { res.status(400).json({ error: "Indica un teléfono o conecta WhatsApp" }); return; }
 
-  const jid = phoneToJidIfValid(targetPhone) ?? phoneToJid(targetPhone);
-  const formatted = targetPhone.startsWith("+") ? targetPhone : `+${targetPhone.replace(/\D/g, "")}`;
+  if (!phone && !patientId) {
+    res.status(400).json({ error: "Indica patientId o phone del paciente (no uses el número de la clínica)" });
+    return;
+  }
+
+  let targetPhone = phone;
+  let patient = null;
+
+  if (patientId) {
+    const [p] = await db.select().from(patientsTable).where(eq(patientsTable.id, patientId));
+    if (!p) { res.status(404).json({ error: "Paciente no encontrado" }); return; }
+    patient = p;
+    targetPhone = p.phone;
+  }
+
+  if (!targetPhone) {
+    res.status(400).json({ error: "Teléfono requerido" });
+    return;
+  }
+
+  if (isClinicPhone(targetPhone, wa.phone)) {
+    res.status(400).json({
+      error: "Ese es el número de la clínica conectada, no del paciente. Usa el teléfono del paciente en Pacientes.",
+    });
+    return;
+  }
+
+  const formatted = formatColombianPhone(targetPhone);
+  const jid = phoneToJidIfValid(formatted) ?? phoneToJid(formatted);
+  const identity = await resolveConversationIdentity(formatted, patient?.name ?? "Contacto", patient?.id ?? null);
 
   const [conv] = await db.update(conversationsTable).set({
     whatsappJid: jid,
-    phone: formatted,
+    phone: identity.phone,
+    patientId: identity.patientId,
+    patientName: identity.patientName,
   }).where(eq(conversationsTable.id, id)).returning();
 
   if (!conv) { res.status(404).json({ error: "Conversación no encontrada" }); return; }
-  res.json({ conversation: conv, whatsappJid: jid });
+  const enriched = await enrichConversationForApi(conv, patient ? { name: patient.name, phone: patient.phone } : null);
+  res.json({ conversation: enriched, whatsappJid: jid });
 });
 
 router.post("/conversations/:id/ai-reply", async (req, res): Promise<void> => {

@@ -143,7 +143,7 @@ export default function Conversations() {
                       <span className="text-xs font-bold text-primary-foreground">{conv.patientName.slice(0, 2).toUpperCase()}</span>
                     </div>
                     <div className="min-w-0">
-                      <p className="font-medium text-sm text-foreground truncate">{conv.patientName}</p>
+                      <p className="font-medium text-sm text-foreground truncate">{(conv as { displayName?: string }).displayName ?? conv.patientName}</p>
                       <p className="text-xs text-muted-foreground truncate">{conv.lastMessage ?? "Sin mensajes"}</p>
                     </div>
                   </div>
@@ -181,8 +181,16 @@ export default function Conversations() {
                       <span className="text-sm font-bold text-primary-foreground">{selected?.patientName.slice(0, 2).toUpperCase()}</span>
                     </div>
                     <div>
-                      <p className="font-semibold text-foreground">{selected?.patientName}</p>
-                      <p className="text-xs text-muted-foreground">{selected?.phone}</p>
+                      <p className="font-semibold text-foreground">
+                        {(selected as { displayName?: string })?.displayName ?? selected?.patientName}
+                        {patient && <span className="text-xs font-normal text-muted-foreground ml-2">· Paciente #{patient.id}</span>}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {(selected as { displayPhone?: string })?.displayPhone ?? selected?.phone}
+                        {(selected as { phoneIsValid?: boolean })?.phoneIsValid === false && (
+                          <span className="text-amber-500 ml-2">· Número WA pendiente de vincular</span>
+                        )}
+                      </p>
                     </div>
                   </div>
                   <div className="flex items-center gap-3">

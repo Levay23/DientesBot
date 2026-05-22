@@ -3,6 +3,8 @@ import { logger } from "./lib/logger";
 import { startWhatsApp } from "./lib/whatsapp";
 import { runStartupSeed } from "./lib/startup-seed";
 import { startAutomationsEngine } from "./lib/automations-engine";
+import { syncAllConversationsWithPatients } from "./lib/conversation-patient-sync";
+import { getWAState } from "./lib/whatsapp";
 import ffmpeg from "fluent-ffmpeg";
 import ffmpegStatic from "ffmpeg-static";
 import fs from "fs";
@@ -38,6 +40,13 @@ app.listen(port, (err) => {
   runStartupSeed().catch((err) => {
     logger.error({ err }, "Error en startup seed");
   });
+
+  setTimeout(() => {
+    const wa = getWAState();
+    syncAllConversationsWithPatients(wa.phone).catch((err) => {
+      logger.error({ err }, "Error sincronizando conversaciones con pacientes");
+    });
+  }, 15000);
 
   // Iniciar WhatsApp Web (Baileys) en background
   startWhatsApp().catch((err) => {
