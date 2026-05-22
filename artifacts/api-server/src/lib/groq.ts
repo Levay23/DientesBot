@@ -62,6 +62,28 @@ function to12h(time24: string): string {
   return `${h}:${m} ${ampm}`;
 }
 
+function formatAvailableSlotsForPrompt(
+  slots?: { label: string; slots: string[] }[],
+): string {
+  if (!slots?.length) return "";
+  const withAvailability = slots.filter((d) => d.slots.length > 0);
+  if (!withAvailability.length) {
+    return `
+HORARIOS DISPONIBLES: No hay cupos libres en los próximos 3 días laborables. Ofrece contactar la clínica o proponer otro día; no inventes horarios.
+`;
+  }
+  const lines = withAvailability.map(
+    (d) => `- ${d.label}: ${d.slots.map((t) => to12h(t)).join(", ")} (reservar con startTime 24h: ${d.slots.join(", ")})`,
+  );
+  return `
+HORARIOS DISPONIBLES PARA AGENDAR (obligatorio usar bookAppointment):
+- Usa la fecha YYYY-MM-DD que aparece entre paréntesis en cada línea.
+- Usa startTime en formato 24h HH:MM exactamente como se lista entre paréntesis "reservar con startTime 24h".
+- Solo ofrece horarios de esta lista; no inventes cupos.
+${lines.join("\n")}
+`;
+}
+
 export async function generateAIResponse(
   conversationId: number | null,
   patientMessage: string,
@@ -170,18 +192,34 @@ export async function generateAIResponse(
     }
 
     const assistantName = p?.name ?? "Andrea";
-    
+
+    const personalitySection = p ? `
+PERFIL DE PERSONALIDAD (configuración de la clínica):
+- Rol: ${p.role}
+- Objetivo principal: ${p.mainGoal}
+- Tono: ${p.tone}
+- Idioma: ${p.language}
+- Longitud de respuestas preferida: ${p.maxResponseLength}
+${p.dontRepeatGreeting ? "- No repitas saludos de presentación en cada mensaje; fluye de forma natural." : ""}
+${p.proactiveQuestions ? "- Haz preguntas proactivas para entender la necesidad del paciente." : ""}
+${p.suggestAppointments ? "- Sugiere agendar citas de valoración cuando hables de tratamientos o precios." : ""}
+${p.escalateKeywords ? `- Si el paciente menciona palabras como: ${p.escalateKeywords}, indica que un asesor humano atenderá pronto.` : ""}
+${p.extraInstructions ? `- Instrucciones adicionales: ${p.extraInstructions}` : ""}
+` : "";
+
+    const slotsSection = formatAvailableSlotsForPrompt(opts.availableSlots);
+
     const systemPrompt = `Eres ${assistantName}, la asistente oficial de ${clinicName} en Medellín.
 Eres una persona real, profesional, muy amable y resolutiva. Tu objetivo es ayudar a los pacientes.
 HOY: ${colombiaDay} ${colombiaDate}, ${colombiaTime}.
-
+${personalitySection}
 PAUTAS IMPORTANTES PARA TU COMPORTAMIENTO:
-- Conversación natural: No tienes que presentarte ("Soy Andrea") en cada mensaje. Si el paciente ya te conoce y te saluda, fluye con la conversación de forma natural y cálida, sin usar frases repetitivas.
+- Conversación natural: No tienes que presentarte ("Soy ${assistantName}") en cada mensaje. Si el paciente ya te conoce y te saluda, fluye con la conversación de forma natural y cálida, sin usar frases repetitivas.
 - Respuestas completas y asesoría: Cuando te pregunten por tratamientos (como implantes, diseños, etc.), lee bien los ARTÍCULOS DE AYUDA. Da una explicación detallada y clara de las opciones.
 - Precios y variaciones: Si das un precio, aclara siempre que es un "precio base" y que puede variar dependiendo del caso clínico. Usa siempre la palabra "pesos" (ej. "Cuesta 100.000 pesos"). ¡PROHIBIDO usar el símbolo "$"!
 - Citas de valoración: Siempre que un paciente pida precios o información de tratamientos, invítalo proactivamente a agendar una cita de valoración en la clínica para darle un diagnóstico exacto.
 - Pagos: No tienes acceso a los pagos ni abonos. Si te piden un recibo, dile con amabilidad que un asesor humano lo revisará pronto.
-
+${slotsSection}
 ACCESO AL PANEL: Tienes acceso a citas, cotizaciones y tratamientos.
 - Si el paciente da un número o nombre, úsalo para identificarlo.
 - Si ya está identificado (ver abajo), usa esa información para responderle mejor.

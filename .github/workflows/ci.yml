@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  typecheck-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Codegen (OpenAPI)
+        run: pnpm --filter @workspace/api-spec run codegen
+
+      - name: Typecheck libraries and API
+        run: pnpm run typecheck:libs && pnpm --filter @workspace/api-server run typecheck
+
+      - name: Build API server
+        run: pnpm --filter @workspace/api-server run build
+        env:
+          DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
+          SESSION_SECRET: ci-secret-for-build-only
+          GROQ_API_KEY: ci-groq-key-placeholder
+          PORT: "8080"

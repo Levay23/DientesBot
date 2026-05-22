@@ -11,7 +11,16 @@ import * as zod from "zod";
  * @summary Health check
  */
 export const HealthCheckResponse = zod.object({
-  status: zod.string(),
+  status: zod.enum(["ok", "degraded"]),
+  database: zod.string().optional(),
+  whatsapp: zod
+    .object({
+      status: zod.string().optional(),
+      connected: zod.boolean().optional(),
+      botEnabled: zod.boolean().optional(),
+    })
+    .optional(),
+  singleInstanceNote: zod.string().optional(),
 });
 
 /**
@@ -149,8 +158,6 @@ export const ListPatientsResponseItem = zod.object({
   lastVisit: zod.coerce.date().nullish(),
   nextAppointment: zod.coerce.date().nullish(),
   notes: zod.string().nullish(),
-  medicalHistory: zod.string().nullish(),
-  treatmentPrice: zod.number().nullish(),
   createdAt: zod.coerce.date(),
 });
 export const ListPatientsResponse = zod.array(ListPatientsResponseItem);
@@ -175,8 +182,6 @@ export const CreatePatientBody = zod.object({
     ])
     .optional(),
   notes: zod.string().optional(),
-  medicalHistory: zod.string().optional(),
-  treatmentPrice: zod.number().optional(),
 });
 
 /**
@@ -204,8 +209,6 @@ export const GetPatientResponse = zod.object({
   lastVisit: zod.coerce.date().nullish(),
   nextAppointment: zod.coerce.date().nullish(),
   notes: zod.string().nullish(),
-  medicalHistory: zod.string().nullish(),
-  treatmentPrice: zod.number().nullish(),
   createdAt: zod.coerce.date(),
 });
 
@@ -233,8 +236,6 @@ export const UpdatePatientBody = zod.object({
     ])
     .optional(),
   notes: zod.string().optional(),
-  medicalHistory: zod.string().optional(),
-  treatmentPrice: zod.number().optional(),
 });
 
 export const UpdatePatientResponse = zod.object({
@@ -255,8 +256,6 @@ export const UpdatePatientResponse = zod.object({
   lastVisit: zod.coerce.date().nullish(),
   nextAppointment: zod.coerce.date().nullish(),
   notes: zod.string().nullish(),
-  medicalHistory: zod.string().nullish(),
-  treatmentPrice: zod.number().nullish(),
   createdAt: zod.coerce.date(),
 });
 
@@ -485,8 +484,6 @@ export const GetConversationResponse = zod.object({
       lastVisit: zod.coerce.date().nullish(),
       nextAppointment: zod.coerce.date().nullish(),
       notes: zod.string().nullish(),
-      medicalHistory: zod.string().nullish(),
-      treatmentPrice: zod.number().nullish(),
       createdAt: zod.coerce.date(),
     })
     .nullish(),
@@ -498,6 +495,10 @@ export const GetConversationResponse = zod.object({
       sender: zod.enum(["patient", "agent", "ai"]),
       sentAt: zod.coerce.date(),
       read: zod.boolean(),
+      sentToWhatsApp: zod
+        .boolean()
+        .optional()
+        .describe("True when agent\/AI message was delivered via WhatsApp"),
     }),
   ),
 });
@@ -549,6 +550,10 @@ export const GetMessagesResponseItem = zod.object({
   sender: zod.enum(["patient", "agent", "ai"]),
   sentAt: zod.coerce.date(),
   read: zod.boolean(),
+  sentToWhatsApp: zod
+    .boolean()
+    .optional()
+    .describe("True when agent\/AI message was delivered via WhatsApp"),
 });
 export const GetMessagesResponse = zod.array(GetMessagesResponseItem);
 
@@ -760,6 +765,74 @@ export const UpdateSettingsBody = zod.object({
   aiSignature: zod.string().optional(),
   autoConfirmAppointments: zod.boolean().optional(),
 });
+
+export const UpdateSettingsResponse = zod.object({
+  clinicName: zod.string(),
+  clinicPhone: zod.string().optional(),
+  workingHoursStart: zod.string(),
+  workingHoursEnd: zod.string(),
+  workingDays: zod.array(zod.string()),
+  defaultAppointmentDuration: zod.number(),
+  aiGreetingMessage: zod.string().optional(),
+  aiSignature: zod.string().optional(),
+  autoConfirmAppointments: zod.boolean().optional(),
+});
+
+/**
+ * @summary Simulate inbound message and optional AI reply
+ */
+export const ReceiveIncomingConversationBody = zod.object({
+  phone: zod.string(),
+  message: zod.string(),
+  patientName: zod.string().optional(),
+});
+
+/**
+ * @summary Trigger AI reply for a conversation
+ */
+export const TriggerAiReplyParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const TriggerAiReplyBody = zod.object({
+  triggerMessage: zod.string().optional(),
+});
+
+/**
+ * @summary Get global AI bot enabled flag
+ */
+export const GetWhatsappBotStatusResponse = zod.object({
+  botEnabled: zod.boolean().optional(),
+});
+
+/**
+ * @summary Enable or disable global AI bot
+ */
+export const ToggleWhatsappBotBody = zod.object({
+  enabled: zod.boolean().optional(),
+});
+
+export const ToggleWhatsappBotResponse = zod.object({
+  botEnabled: zod.boolean().optional(),
+});
+
+/**
+ * @summary Reconnect WhatsApp session
+ */
+export const ReconnectWhatsappResponse = zod.object({}).passthrough();
+
+/**
+ * @summary Send manual WhatsApp text message
+ */
+export const SendWhatsappMessageBody = zod.object({
+  phone: zod.string(),
+  message: zod.string(),
+});
+
+export const SendWhatsappMessageResponse = zod.object({
+  ok: zod.boolean().optional(),
+});
+
 /**
  * @summary List evolution notes for a patient
  */
@@ -767,13 +840,10 @@ export const ListEvolutionNotesParams = zod.object({
   patientId: zod.coerce.number(),
 });
 
-export const EvolutionNoteResponse = zod.object({
-  id: zod.number(),
-  patientId: zod.number(),
-  content: zod.string(),
-  doctorName: zod.string().nullish(),
-  createdAt: zod.coerce.date(),
-});
+export const ListEvolutionNotesResponseItem = zod.object({}).passthrough();
+export const ListEvolutionNotesResponse = zod.array(
+  ListEvolutionNotesResponseItem,
+);
 
 /**
  * @summary Create evolution note
@@ -791,42 +861,127 @@ export const ListQuotationsQueryParams = zod.object({
   patientId: zod.coerce.number().optional(),
 });
 
-export const QuotationResponse = zod.object({
+export const ListQuotationsResponseItem = zod.object({
   id: zod.number(),
   patientId: zod.number(),
   patientName: zod.string().optional(),
-  items: zod.array(zod.object({
-    service: zod.string(),
-    price: zod.number(),
-    quantity: zod.number().default(1),
-  })),
+  items: zod.array(
+    zod.object({
+      service: zod.string(),
+      price: zod.number(),
+      quantity: zod.number().optional(),
+    }),
+  ),
   total: zod.number(),
   status: zod.string(),
   createdAt: zod.coerce.date(),
 });
+export const ListQuotationsResponse = zod.array(ListQuotationsResponseItem);
 
 /**
  * @summary Create quotation
  */
 export const CreateQuotationBody = zod.object({
   patientId: zod.number(),
-  items: zod.array(zod.object({
-    service: zod.string(),
-    price: zod.number(),
-    quantity: zod.number().default(1),
-  })),
+  items: zod.array(
+    zod.object({
+      service: zod.string(),
+      price: zod.number(),
+      quantity: zod.number().optional(),
+    }),
+  ),
   total: zod.number(),
+  status: zod.string().optional(),
   sendToWhatsApp: zod.boolean().optional(),
 });
 
-export const UpdateSettingsResponse = zod.object({
-  clinicName: zod.string(),
-  clinicPhone: zod.string().optional(),
-  workingHoursStart: zod.string(),
-  workingHoursEnd: zod.string(),
-  workingDays: zod.array(zod.string()),
-  defaultAppointmentDuration: zod.number(),
-  aiGreetingMessage: zod.string().optional(),
-  aiSignature: zod.string().optional(),
-  autoConfirmAppointments: zod.boolean().optional(),
+/**
+ * @summary Update quotation
+ */
+export const UpdateQuotationParams = zod.object({
+  id: zod.coerce.number(),
 });
+
+export const UpdateQuotationBody = zod.object({
+  patientId: zod.number().optional(),
+  items: zod
+    .array(
+      zod.object({
+        service: zod.string(),
+        price: zod.number(),
+        quantity: zod.number().optional(),
+      }),
+    )
+    .optional(),
+  total: zod.number().optional(),
+  status: zod.string().optional(),
+  sendToWhatsApp: zod.boolean().optional(),
+});
+
+export const UpdateQuotationResponse = zod.object({
+  id: zod.number(),
+  patientId: zod.number(),
+  patientName: zod.string().optional(),
+  items: zod.array(
+    zod.object({
+      service: zod.string(),
+      price: zod.number(),
+      quantity: zod.number().optional(),
+    }),
+  ),
+  total: zod.number(),
+  status: zod.string(),
+  createdAt: zod.coerce.date(),
+});
+
+/**
+ * @summary Delete quotation
+ */
+export const DeleteQuotationParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const DeleteQuotationResponse = zod.object({
+  message: zod.string(),
+});
+
+/**
+ * @summary List AI knowledge entries
+ */
+export const ListAiKnowledgeResponseItem = zod.object({}).passthrough();
+export const ListAiKnowledgeResponse = zod.array(ListAiKnowledgeResponseItem);
+
+/**
+ * @summary Update knowledge entry
+ */
+export const UpdateAiKnowledgeParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const UpdateAiKnowledgeResponse = zod.object({}).passthrough();
+
+/**
+ * @summary Delete knowledge entry
+ */
+export const DeleteAiKnowledgeParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const DeleteAiKnowledgeResponse = zod.object({
+  message: zod.string(),
+});
+
+/**
+ * @summary Get AI personality config
+ */
+export const GetAiPersonalityResponse = zod.object({}).passthrough();
+
+/**
+ * @summary Update AI personality
+ */
+export const UpdateAiPersonalityResponse = zod.object({}).passthrough();
+
+/**
+ * @summary Test AI response without WhatsApp
+ */
+export const TestAiResponseResponse = zod.object({}).passthrough();

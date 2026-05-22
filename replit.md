@@ -66,11 +66,14 @@ Sistema CRM para clínica dental. Permite gestionar pacientes, citas, mensajes d
 
 ## Gotchas
 
-- WhatsApp session is persisted in `artifacts/api-server/auth_info_baileys/`. Delete this folder to reset the WA session.
-- `GROQ_API_KEY` is required for the AI assistant — without it, AI responses will fail silently.
+- WhatsApp session is persisted in PostgreSQL table `whatsapp_auth`. Use **WhatsApp → Desconectar** in the CRM or `POST /api/whatsapp/disconnect` to reset and scan QR again.
+- `GROQ_API_KEY` is required for the AI assistant — without it, AI responses will fail.
 - The `artifacts/crm: Dientes Fijos Medellín CRM` workflow (port 22444) is a stale manually-configured workflow; the canonical one is `artifacts/crm: web` (port 5000).
-- Automations do not auto-send — they are template rules. A scheduler/cron must be added to trigger them automatically.
+- Automations run automatically every **15 minutes** when the API server is up and WhatsApp is connected.
+- **Render:** keep a **single instance** of `dientesbot-api` — Baileys cannot run on multiple nodes. Check `GET /api/healthz` for DB + WhatsApp status.
+- Agent messages from Chat Center are sent to the patient's WhatsApp when the session is connected.
 - Run `pnpm --filter @workspace/db run push` after any schema change before restarting the API server.
+- CI: GitHub Actions runs `pnpm run typecheck` and `pnpm run build` on push/PR to `main`/`master`.
 
 ## Pointers
 

@@ -5,8 +5,25 @@
  * Dientes Fijos Medellín CRM API
  * OpenAPI spec version: 0.1.0
  */
+export type HealthStatusStatus =
+  (typeof HealthStatusStatus)[keyof typeof HealthStatusStatus];
+
+export const HealthStatusStatus = {
+  ok: "ok",
+  degraded: "degraded",
+} as const;
+
+export type HealthStatusWhatsapp = {
+  status?: string;
+  connected?: boolean;
+  botEnabled?: boolean;
+};
+
 export interface HealthStatus {
-  status: string;
+  status: HealthStatusStatus;
+  database?: string;
+  whatsapp?: HealthStatusWhatsapp;
+  singleInstanceNote?: string;
 }
 
 export interface ErrorResponse {
@@ -100,10 +117,6 @@ export interface Patient {
   lastVisit?: string | null;
   nextAppointment?: string | null;
   notes?: string | null;
-  medicalHistory?: string | null;
-  treatmentPrice?: number | null;
-  diagnosis?: string | null;
-  odontogram?: any | null;
   createdAt: string;
 }
 
@@ -127,8 +140,6 @@ export interface CreatePatientBody {
   treatment?: string;
   status?: CreatePatientBodyStatus;
   notes?: string;
-  medicalHistory?: string;
-  treatmentPrice?: number;
 }
 
 export type UpdatePatientBodyStatus =
@@ -151,10 +162,6 @@ export interface UpdatePatientBody {
   treatment?: string;
   status?: UpdatePatientBodyStatus;
   notes?: string;
-  medicalHistory?: string;
-  treatmentPrice?: number;
-  diagnosis?: string;
-  odontogram?: any;
 }
 
 export type AppointmentStatus =
@@ -254,6 +261,8 @@ export interface Message {
   sender: MessageSender;
   sentAt: string;
   read: boolean;
+  /** True when agent/AI message was delivered via WhatsApp */
+  sentToWhatsApp?: boolean;
 }
 
 export interface ConversationDetail {
@@ -274,6 +283,52 @@ export interface UnreadStats {
 
 export interface SendMessageBody {
   content: string;
+}
+
+export interface EvolutionNote {
+  id: number;
+  patientId: number;
+  content: string;
+  doctorName?: string | null;
+  createdAt: string;
+}
+
+export interface CreateEvolutionNoteBody {
+  patientId: number;
+  content: string;
+  doctorName?: string;
+}
+
+export interface QuotationItem {
+  service: string;
+  price: number;
+  quantity?: number;
+}
+
+export interface Quotation {
+  id: number;
+  patientId: number;
+  patientName?: string;
+  items: QuotationItem[];
+  total: number;
+  status: string;
+  createdAt: string;
+}
+
+export interface CreateQuotationBody {
+  patientId: number;
+  items: QuotationItem[];
+  total: number;
+  status?: string;
+  sendToWhatsApp?: boolean;
+}
+
+export interface UpdateQuotationBody {
+  patientId?: number;
+  items?: QuotationItem[];
+  total?: number;
+  status?: string;
+  sendToWhatsApp?: boolean;
 }
 
 export type WhatsappStatusStatus =
@@ -440,48 +495,57 @@ export type ListConversationsParams = {
   label?: string;
 };
 
-export interface EvolutionNote {
-  id: number;
-  patientId: number;
-  content: string;
-  doctorName?: string | null;
-  createdAt: string;
-}
-
-export interface CreateEvolutionNoteBody {
-  patientId: number;
-  content: string;
-  doctorName?: string;
-}
-
-export interface Quotation {
-  id: number;
-  patientId: number;
+export type ReceiveIncomingConversationBody = {
+  phone: string;
+  message: string;
   patientName?: string;
-  items: { service: string; price: number }[];
-  total: number;
-  status: string;
-  createdAt: string;
-}
-
-export interface CreateQuotationBody {
-  patientId: number;
-  items: { service: string; price: number }[];
-  total: number;
-  sendToWhatsApp?: boolean;
-}
-
-export interface UpdateQuotationBody {
-  patientId?: number;
-  items?: { service: string; price: number }[];
-  total?: number;
-  sendToWhatsApp?: boolean;
-}
-
-export type ListEvolutionNotesParams = {
-  patientId: number;
 };
+
+export type ReceiveIncomingConversation201 = { [key: string]: unknown };
+
+export type TriggerAiReplyBody = {
+  triggerMessage?: string;
+};
+
+export type GetWhatsappBotStatus200 = {
+  botEnabled?: boolean;
+};
+
+export type ToggleWhatsappBotBody = {
+  enabled?: boolean;
+};
+
+export type ToggleWhatsappBot200 = {
+  botEnabled?: boolean;
+};
+
+export type ReconnectWhatsapp200 = { [key: string]: unknown };
+
+export type SendWhatsappMessageBody = {
+  phone: string;
+  message: string;
+};
+
+export type SendWhatsappMessage200 = {
+  ok?: boolean;
+};
+
+export type ListEvolutionNotes200Item = { [key: string]: unknown };
 
 export type ListQuotationsParams = {
   patientId?: number;
 };
+
+export type ListAiKnowledge200Item = { [key: string]: unknown };
+
+export type CreateAiKnowledge201 = { [key: string]: unknown };
+
+export type UpdateAiKnowledge200 = { [key: string]: unknown };
+
+export type UploadAiKnowledge201 = { [key: string]: unknown };
+
+export type GetAiPersonality200 = { [key: string]: unknown };
+
+export type UpdateAiPersonality200 = { [key: string]: unknown };
+
+export type TestAiResponse200 = { [key: string]: unknown };

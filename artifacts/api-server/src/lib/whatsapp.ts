@@ -7,12 +7,14 @@ import makeWASocket, {
 } from "@whiskeysockets/baileys";
 import { Boom } from "@hapi/boom";
 import QRCode from "qrcode";
-import { db, conversationsTable, messagesTable, patientsTable, appointmentsTable, settingsTable } from "@workspace/db";
+import { db, conversationsTable, messagesTable, patientsTable, settingsTable } from "@workspace/db";
 import { eq, sql, or, and } from "drizzle-orm";
 import { generateAIResponse, transcribeAudio } from "./groq";
 import { synthesizeAudio } from "./tts";
 import { logger } from "./logger";
 import { usePostgresAuthState } from "./postgres-auth-state";
+import { getAvailableSlots } from "./appointment-slots";
+import { processAIActions } from "./ai-actions";
 
 export interface WAState {
   connected: boolean;
@@ -82,6 +84,12 @@ export async function setBotEnabled(enabled: boolean): Promise<void> {
   logger.info({ botEnabled: enabled }, "Bot IA global actualizado y persistido");
 }
 
+export function phoneToJid(phone: string): string {
+  const clean = phone.replace(/\D/g, "");
+  const finalPhone = clean.length === 10 && clean.startsWith("3") ? `57${clean}` : clean;
+  return `${finalPhone}@s.whatsapp.net`;
+}
+
 export async function sendWAMessage(jid: string, text: string): Promise<boolean> {
   if (!sock || !_state.connected) return false;
   try {
@@ -91,6 +99,10 @@ export async function sendWAMessage(jid: string, text: string): Promise<boolean>
     logger.error({ err }, "Error enviando mensaje WhatsApp");
     return false;
   }
+}
+
+export async function sendMessageToPhone(phone: string, text: string): Promise<boolean> {
+  return sendWAMessage(phoneToJid(phone), text);
 }
 
 export async function disconnectWA(): Promise<void> {
@@ -111,100 +123,6 @@ export async function disconnectWA(): Promise<void> {
     qrDataUrl: null,
     botEnabled: _state.botEnabled,
   };
-}
-
-function addMinutes(time: string, minutes: number): string {
-  const [h, m] = time.split(":").map(Number);
-  const total = h * 60 + m + minutes;
-  return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
-}
-
-function getColombiaDate(offsetDays = 0): string {
-  const now = new Date();
-  now.setDate(now.getDate() + offsetDays);
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/Bogota",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(now);
-}
-
-function getColombiaTime(): string {
-  return new Intl.DateTimeFormat("en-GB", {
-    timeZone: "America/Bogota",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(new Date());
-}
-
-function getColombiaWeekday(): string {
-  return new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/Bogota",
-    weekday: "long",
-  }).format(new Date()).toLowerCase();
-}
-
-async function getAvailableSlots(): Promise<{ label: string; slots: string[] }[]> {
-  try {
-    const [settings] = await db.select().from(settingsTable).limit(1);
-    const startHour = settings?.workingHoursStart ?? "08:00";
-    const endHour = settings?.workingHoursEnd ?? "18:00";
-    const duration = settings?.defaultAppointmentDuration ?? 60;
-    const workingDays = (settings?.workingDays ?? "monday,tuesday,wednesday,thursday,friday,saturday").split(",");
-
-    const dayNames: Record<string, string> = {
-      monday: "lunes", tuesday: "martes", wednesday: "miércoles",
-      thursday: "jueves", friday: "viernes", saturday: "sábado", sunday: "domingo",
-    };
-
-    const results: { label: string; slots: string[] }[] = [];
-    const currentTime = getColombiaTime();
-
-    for (let offset = 0; offset <= 2; offset++) {
-      const dateStr = getColombiaDate(offset);
-      const weekday = new Intl.DateTimeFormat("en-US", {
-        timeZone: "America/Bogota",
-        weekday: "long",
-      }).format(new Date(dateStr + "T12:00:00")).toLowerCase();
-
-      if (!workingDays.includes(weekday)) continue;
-
-      const existing = await db.select().from(appointmentsTable)
-        .where(and(
-          eq(appointmentsTable.date, dateStr),
-          sql`${appointmentsTable.status} != 'cancelled'`
-        ));
-
-      const slots: string[] = [];
-      let current = startHour;
-      while (current < endHour) {
-        const next = addMinutes(current, duration);
-        if (next > endHour) break;
-        const conflict = existing.some(a => !(a.endTime <= current || a.startTime >= next));
-        const isPast = offset === 0 && current <= currentTime;
-        if (!conflict && !isPast) {
-          slots.push(current);
-        }
-        current = next;
-      }
-
-      const labelDay = offset === 0 ? "Hoy" : offset === 1 ? "Mañana" : dayNames[weekday] ?? dateStr;
-      const dateFormatted = new Intl.DateTimeFormat("es-CO", {
-        timeZone: "America/Bogota",
-        day: "numeric",
-        month: "long",
-      }).format(new Date(dateStr + "T12:00:00"));
-
-      results.push({ label: `${labelDay} ${dateFormatted} (${dateStr})`, slots });
-    }
-
-    return results;
-  } catch (err) {
-    logger.error({ err }, "Error obteniendo horarios disponibles");
-    return [];
-  }
 }
 
 async function handleIncomingMessage(msg: proto.IWebMessageInfo): Promise<void> {
@@ -364,143 +282,18 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo): Promise<void> 
     }
         }
         
-        const { registerPatient, bookAppointment, updatePhone } = aiResult.actions;
-        // ... rest of processing ...
-
-      if (registerPatient && !conv.patientId && registerPatient.name) {
-        try {
-          // Register with WhatsApp JID phone as fallback; patient's own phone comes via updatePhone later
-          const contactPhone = registerPatient.phone
-            ? (registerPatient.phone.startsWith("+") ? registerPatient.phone : `+${registerPatient.phone.replace(/\D/g, "")}`)
-            : formattedPhone;
-
-          const existingByPhone = await db.select().from(patientsTable)
-            .where(eq(patientsTable.phone, contactPhone));
-
-          let patientId: number;
-          if (existingByPhone.length > 0) {
-            patientId = existingByPhone[0].id;
-            await db.update(patientsTable).set({
-              treatment: registerPatient.treatment || existingByPhone[0].treatment,
-            }).where(eq(patientsTable.id, patientId));
-          } else {
-            const [newPatient] = await db.insert(patientsTable).values({
-              name: registerPatient.name,
-              phone: contactPhone,
-              treatment: registerPatient.treatment || "Consulta general",
-              status: "new",
-            }).returning();
-            patientId = newPatient.id;
-          }
-
-          await db.update(conversationsTable).set({
-            patientId,
-            patientName: registerPatient.name,
-          }).where(eq(conversationsTable.id, conv.id));
-
-          conv = { ...conv, patientId, patientName: registerPatient.name };
-          logger.info({ patientId, name: registerPatient.name, phone: contactPhone }, "Paciente registrado automáticamente por bot");
-        } catch (err) {
-          logger.error({ err }, "Error registrando paciente desde bot");
-        }
-      }
-
-      // Update patient phone when they provide their own contact number
-      if (updatePhone && updatePhone.phone) {
-        try {
-          let patientId = conv.patientId;
-          if (!patientId) {
-            const [byWAPhone] = await db.select().from(patientsTable).where(eq(patientsTable.phone, formattedPhone));
-            patientId = byWAPhone?.id ?? null;
-          }
-          if (patientId) {
-            const cleanPhone = updatePhone.phone.replace(/\D/g, "");
-            const normalized = cleanPhone.startsWith("57") && cleanPhone.length === 12
-              ? `+${cleanPhone}`
-              : cleanPhone.length === 10
-              ? `+57${cleanPhone}`
-              : `+${cleanPhone}`;
-            await db.update(patientsTable).set({ phone: normalized }).where(eq(patientsTable.id, patientId));
-            logger.info({ patientId, phone: normalized }, "Teléfono del paciente actualizado por bot");
-          }
-        } catch (err) {
-          logger.error({ err }, "Error actualizando teléfono del paciente");
-        }
-      }
-
-      if (bookAppointment && bookAppointment.date && bookAppointment.startTime) {
-        try {
-          let patientId = conv.patientId;
-          if (!patientId) {
-            const [existingByPhone] = await db.select().from(patientsTable)
-              .where(eq(patientsTable.phone, formattedPhone));
-            patientId = existingByPhone?.id ?? null;
-          }
-
-          if (patientId) {
-            const [settings] = await db.select().from(settingsTable).limit(1);
-            const duration = settings?.defaultAppointmentDuration ?? 60;
-            const endTime = addMinutes(bookAppointment.startTime, duration);
-
-            try {
-              await db.transaction(async (tx) => {
-                // Guard 1: check time slot conflict (another patient already at that time)
-                const slotConflicts = await tx.select().from(appointmentsTable)
-                  .where(and(
-                    eq(appointmentsTable.date, bookAppointment.date),
-                    sql`${appointmentsTable.status} != 'cancelled'`,
-                  ));
-                const hasSlotConflict = slotConflicts.some(
-                  a => !(a.endTime <= bookAppointment.startTime || a.startTime >= endTime)
-                );
-
-                // Guard 2: same patient already has a non-cancelled appointment that day
-                const patientConflicts = await tx.select().from(appointmentsTable)
-                  .where(and(
-                    eq(appointmentsTable.patientId, patientId),
-                    eq(appointmentsTable.date, bookAppointment.date),
-                    sql`${appointmentsTable.status} != 'cancelled'`,
-                  ));
-                const hasPatientConflict = patientConflicts.length > 0;
-
-                if (hasSlotConflict) {
-                  throw new Error("slot_conflict");
-                } else if (hasPatientConflict) {
-                  throw new Error("patient_conflict");
-                }
-
-                const apptNotes = bookAppointment.notes
-                  ? `${bookAppointment.notes} | Agendado por WhatsApp Bot`
-                  : "Agendado automáticamente por WhatsApp Bot";
-
-                const [appt] = await tx.insert(appointmentsTable).values({
-                  patientId,
-                  treatment: bookAppointment.treatment || "Consulta general",
-                  date: bookAppointment.date,
-                  startTime: bookAppointment.startTime,
-                  endTime,
-                  status: "scheduled",
-                  notes: apptNotes,
-                }).returning();
-
-                logger.info({ appt }, "Cita registrada automáticamente por bot");
-              });
-            } catch (txErr: any) {
-              if (txErr.message === "slot_conflict") {
-                logger.warn({ bookAppointment }, "Cita rechazada: franja horaria ya ocupada");
-              } else if (txErr.message === "patient_conflict") {
-                logger.warn({ patientId, date: bookAppointment.date }, "Cita rechazada: paciente ya tiene cita ese día");
-              } else {
-                throw txErr; // Re-throw unhandled errors
-              }
-            }
-          } else {
-            logger.warn({ bookAppointment }, "No se pudo registrar cita: paciente no encontrado");
-          }
-        } catch (err) {
-          logger.error({ err }, "Error registrando cita desde bot");
-        }
-      }
+        const { conversation: updatedConv } = await processAIActions(
+          {
+            id: conv.id,
+            patientId: conv.patientId,
+            patientName: conv.patientName,
+            phone: formattedPhone,
+          },
+          formattedPhone,
+          aiResult.actions,
+          "whatsapp",
+        );
+        conv = { ...conv, ...updatedConv };
     } catch (err) {
       logger.error({ err }, "Error procesando respuesta IA");
     }

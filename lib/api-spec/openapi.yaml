@@ -30,6 +30,10 @@ tags:
     description: Dental treatments catalog
   - name: settings
     description: Clinic settings
+  - name: clinical
+    description: Clinical records and quotations
+  - name: ai-training
+    description: AI knowledge and personality
 
 paths:
   /healthz:
@@ -770,12 +774,392 @@ paths:
               schema:
                 $ref: "#/components/schemas/Settings"
 
+  /conversations/incoming:
+    post:
+      operationId: receiveIncomingConversation
+      tags: [conversations]
+      summary: Simulate inbound message and optional AI reply
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                phone:
+                  type: string
+                message:
+                  type: string
+                patientName:
+                  type: string
+              required: [phone, message]
+      responses:
+        "201":
+          description: Processed
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /conversations/{id}/ai-reply:
+    post:
+      operationId: triggerAiReply
+      tags: [conversations]
+      summary: Trigger AI reply for a conversation
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                triggerMessage:
+                  type: string
+      responses:
+        "201":
+          description: AI message created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Message"
+
+  /whatsapp/bot-status:
+    get:
+      operationId: getWhatsappBotStatus
+      tags: [whatsapp]
+      summary: Get global AI bot enabled flag
+      responses:
+        "200":
+          description: Bot status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  botEnabled:
+                    type: boolean
+
+  /whatsapp/bot-toggle:
+    post:
+      operationId: toggleWhatsappBot
+      tags: [whatsapp]
+      summary: Enable or disable global AI bot
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled:
+                  type: boolean
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  botEnabled:
+                    type: boolean
+
+  /whatsapp/reconnect:
+    post:
+      operationId: reconnectWhatsapp
+      tags: [whatsapp]
+      summary: Reconnect WhatsApp session
+      responses:
+        "200":
+          description: Reconnect initiated
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /whatsapp/send:
+    post:
+      operationId: sendWhatsappMessage
+      tags: [whatsapp]
+      summary: Send manual WhatsApp text message
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                phone:
+                  type: string
+                message:
+                  type: string
+              required: [phone, message]
+      responses:
+        "200":
+          description: Send result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+
+  /clinical/evolution/{patientId}:
+    get:
+      operationId: listEvolutionNotes
+      tags: [clinical]
+      summary: List evolution notes for a patient
+      parameters:
+        - name: patientId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Notes list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+
+  /clinical/evolution:
+    post:
+      operationId: createEvolutionNote
+      tags: [clinical]
+      summary: Create evolution note
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateEvolutionNoteBody"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EvolutionNote"
+
+  /clinical/quotations:
+    get:
+      operationId: listQuotations
+      tags: [clinical]
+      summary: List quotations
+      parameters:
+        - name: patientId
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Quotations
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Quotation"
+    post:
+      operationId: createQuotation
+      tags: [clinical]
+      summary: Create quotation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateQuotationBody"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Quotation"
+
+  /clinical/quotations/{id}:
+    patch:
+      operationId: updateQuotation
+      tags: [clinical]
+      summary: Update quotation
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateQuotationBody"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Quotation"
+    delete:
+      operationId: deleteQuotation
+      tags: [clinical]
+      summary: Delete quotation
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+
+  /ai-training/knowledge:
+    get:
+      operationId: listAiKnowledge
+      tags: [ai-training]
+      summary: List AI knowledge entries
+      responses:
+        "200":
+          description: Knowledge list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+    post:
+      operationId: createAiKnowledge
+      tags: [ai-training]
+      summary: Create knowledge entry
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /ai-training/knowledge/{id}:
+    put:
+      operationId: updateAiKnowledge
+      tags: [ai-training]
+      summary: Update knowledge entry
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                type: object
+    delete:
+      operationId: deleteAiKnowledge
+      tags: [ai-training]
+      summary: Delete knowledge entry
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+
+  /ai-training/upload:
+    post:
+      operationId: uploadAiKnowledge
+      tags: [ai-training]
+      summary: Bulk upload knowledge
+      responses:
+        "201":
+          description: Uploaded
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /ai-training/personality:
+    get:
+      operationId: getAiPersonality
+      tags: [ai-training]
+      summary: Get AI personality config
+      responses:
+        "200":
+          description: Personality
+          content:
+            application/json:
+              schema:
+                type: object
+    put:
+      operationId: updateAiPersonality
+      tags: [ai-training]
+      summary: Update AI personality
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /ai-training/test:
+    post:
+      operationId: testAiResponse
+      tags: [ai-training]
+      summary: Test AI response without WhatsApp
+      responses:
+        "200":
+          description: Test result
+          content:
+            application/json:
+              schema:
+                type: object
+
 components:
   schemas:
     HealthStatus:
       type: object
       properties:
         status:
+          type: string
+          enum: [ok, degraded]
+        database:
+          type: string
+        whatsapp:
+          type: object
+          properties:
+            status:
+              type: string
+            connected:
+              type: boolean
+            botEnabled:
+              type: boolean
+        singleInstanceNote:
           type: string
       required: [status]
 
@@ -1130,6 +1514,9 @@ components:
           format: date-time
         read:
           type: boolean
+        sentToWhatsApp:
+          type: boolean
+          description: True when agent/AI message was delivered via WhatsApp
       required: [id, conversationId, content, sender, sentAt, read]
 
     SendMessageBody:
@@ -1138,6 +1525,100 @@ components:
         content:
           type: string
       required: [content]
+
+    EvolutionNote:
+      type: object
+      properties:
+        id:
+          type: integer
+        patientId:
+          type: integer
+        content:
+          type: string
+        doctorName:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, patientId, content, createdAt]
+
+    CreateEvolutionNoteBody:
+      type: object
+      properties:
+        patientId:
+          type: integer
+        content:
+          type: string
+        doctorName:
+          type: string
+      required: [patientId, content]
+
+    QuotationItem:
+      type: object
+      properties:
+        service:
+          type: string
+        price:
+          type: number
+        quantity:
+          type: integer
+      required: [service, price]
+
+    Quotation:
+      type: object
+      properties:
+        id:
+          type: integer
+        patientId:
+          type: integer
+        patientName:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/QuotationItem"
+        total:
+          type: number
+        status:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, patientId, items, total, status, createdAt]
+
+    CreateQuotationBody:
+      type: object
+      properties:
+        patientId:
+          type: integer
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/QuotationItem"
+        total:
+          type: number
+        status:
+          type: string
+        sendToWhatsApp:
+          type: boolean
+      required: [patientId, items, total]
+
+    UpdateQuotationBody:
+      type: object
+      properties:
+        patientId:
+          type: integer
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/QuotationItem"
+        total:
+          type: number
+        status:
+          type: string
+        sendToWhatsApp:
+          type: boolean
 
     WhatsappStatus:
       type: object

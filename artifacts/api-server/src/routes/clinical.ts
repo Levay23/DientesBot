@@ -7,7 +7,7 @@ import {
   ListEvolutionNotesParams,
   ListQuotationsQueryParams,
 } from "@workspace/api-zod";
-import { getWhatsAppSock } from "../lib/whatsapp";
+import { getWhatsAppSock, phoneToJid } from "../lib/whatsapp";
 import { logger } from "../lib/logger";
 import { generateQuotationImage } from "../lib/quotation-image";
 
@@ -68,9 +68,7 @@ router.post("/clinical/quotations", async (req, res): Promise<void> => {
       const [settings] = await db.select().from(settingsTable).limit(1);
       if (patient) {
         const sock = getWhatsAppSock();
-        const cleanPhone = patient.phone.replace(/\D/g, "");
-        const finalPhone = (cleanPhone.length === 10 && cleanPhone.startsWith("3")) ? `57${cleanPhone}` : cleanPhone;
-        const jid = `${finalPhone}@s.whatsapp.net`;
+        const jid = phoneToJid(patient.phone);
         const clinicName = settings?.clinicName ?? "Dientes Fijos Medellín";
         
         logger.info({ jid, patientName: patient.name }, "Generando imagen de presupuesto profesional");
@@ -123,9 +121,7 @@ router.patch("/clinical/quotations/:id", async (req, res): Promise<void> => {
       const [settings] = await db.select().from(settingsTable).limit(1);
       if (patient) {
         const sock = getWhatsAppSock();
-        const cleanPhone = patient.phone.replace(/\D/g, "");
-        const finalPhone = (cleanPhone.length === 10 && cleanPhone.startsWith("3")) ? `57${cleanPhone}` : cleanPhone;
-        const jid = `${finalPhone}@s.whatsapp.net`;
+        const jid = phoneToJid(patient.phone);
         const clinicName = settings?.clinicName ?? "Dientes Fijos Medellín";
         
         if (sock) {

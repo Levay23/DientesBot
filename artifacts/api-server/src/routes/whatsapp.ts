@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { getWAState, sendWAMessage, disconnectWA, getBotEnabled, setBotEnabled, startWhatsApp } from "../lib/whatsapp";
+import { getWAState, sendWAMessage, phoneToJid, disconnectWA, getBotEnabled, setBotEnabled, startWhatsApp } from "../lib/whatsapp";
 
 const router: IRouter = Router();
 
@@ -64,8 +64,7 @@ router.post("/whatsapp/send", async (req, res): Promise<void> => {
     res.status(400).json({ error: "Se requiere phone y message" });
     return;
   }
-  const jid = phone.replace(/\D/g, "") + "@s.whatsapp.net";
-  const ok = await sendWAMessage(jid, message);
+  const ok = await sendWAMessage(phoneToJid(phone), message);
   res.json({ ok });
 });
 
