@@ -12,7 +12,7 @@ import {
 import { generateAIResponse } from "../lib/groq";
 import { getAvailableSlots } from "../lib/appointment-slots";
 import { processAIActions } from "../lib/ai-actions";
-import { sendMessageToPhone, getWAState } from "../lib/whatsapp";
+import { sendMessageToConversation, getWAState } from "../lib/whatsapp";
 import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
@@ -228,15 +228,23 @@ router.post("/messages/:conversationId", async (req, res): Promise<void> => {
   }).where(eq(conversationsTable.id, params.data.conversationId));
 
   let sentToWhatsApp = false;
+  let whatsappError: string | null = null;
   const waState = getWAState();
-  if (conv.phone && waState.connected) {
-    sentToWhatsApp = await sendMessageToPhone(conv.phone, parsed.data.content);
+  if (!waState.connected) {
+    whatsappError = "WhatsApp no está conectado";
+  } else if (!conv.whatsappJid && !conv.phone) {
+    whatsappError = "Conversación sin JID de WhatsApp";
+  } else {
+    sentToWhatsApp = await sendMessageToConversation(conv, parsed.data.content);
     if (!sentToWhatsApp) {
-      logger.warn({ conversationId: conv.id, phone: conv.phone }, "Mensaje del agente guardado pero no enviado a WhatsApp");
+      whatsappError = conv.whatsappJid
+        ? "Error al enviar por WhatsApp (revisa los logs del servidor)"
+        : "Número inválido. Pide al contacto que escriba de nuevo para vincular el chat.";
+      logger.warn({ conversationId: conv.id, phone: conv.phone, whatsappJid: conv.whatsappJid }, "Mensaje del agente guardado pero no enviado a WhatsApp");
     }
   }
 
-  res.status(201).json({ ...msg, sentToWhatsApp });
+  res.status(201).json({ ...msg, sentToWhatsApp, whatsappError });
 });
 
 router.post("/conversations/:id/ai-reply", async (req, res): Promise<void> => {
@@ -290,8 +298,8 @@ router.post("/conversations/:id/ai-reply", async (req, res): Promise<void> => {
       void updatedConv;
 
       const waState = getWAState();
-      if (conv.phone && waState.connected) {
-        sentToWhatsApp = await sendMessageToPhone(conv.phone, aiText);
+      if (waState.connected) {
+        sentToWhatsApp = await sendMessageToConversation(conv, aiText);
       }
     }
   } catch (err) {

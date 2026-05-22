@@ -8,6 +8,7 @@ export const conversationsTable = pgTable("conversations", {
   patientId: integer("patient_id").references(() => patientsTable.id, { onDelete: "set null" }),
   patientName: text("patient_name").notNull(),
   phone: text("phone").notNull(),
+  whatsappJid: text("whatsapp_jid"),
   lastMessage: text("last_message"),
   lastMessageAt: timestamp("last_message_at"),
   unreadCount: integer("unread_count").notNull().default(0),

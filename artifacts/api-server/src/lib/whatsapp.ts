@@ -15,6 +15,7 @@ import { logger } from "./logger";
 import { usePostgresAuthState } from "./postgres-auth-state";
 import { getAvailableSlots } from "./appointment-slots";
 import { processAIActions } from "./ai-actions";
+import { parseIncomingContact, resolveOutboundJid, phoneToJidIfValid } from "./jid-utils";
 
 export interface WAState {
   connected: boolean;
@@ -85,6 +86,8 @@ export async function setBotEnabled(enabled: boolean): Promise<void> {
 }
 
 export function phoneToJid(phone: string): string {
+  const jid = phoneToJidIfValid(phone);
+  if (jid) return jid;
   const clean = phone.replace(/\D/g, "");
   const finalPhone = clean.length === 10 && clean.startsWith("3") ? `57${clean}` : clean;
   return `${finalPhone}@s.whatsapp.net`;
@@ -92,17 +95,33 @@ export function phoneToJid(phone: string): string {
 
 export async function sendWAMessage(jid: string, text: string): Promise<boolean> {
   if (!sock || !_state.connected) return false;
+  if (!jid?.includes("@")) return false;
   try {
     await sock.sendMessage(jid, { text });
     return true;
   } catch (err) {
-    logger.error({ err }, "Error enviando mensaje WhatsApp");
+    logger.error({ err, jid }, "Error enviando mensaje WhatsApp");
     return false;
   }
 }
 
+export async function sendMessageToConversation(
+  conv: { whatsappJid?: string | null; phone: string },
+  text: string,
+): Promise<boolean> {
+  const jid = resolveOutboundJid(conv);
+  if (!jid) {
+    logger.warn({ phone: conv.phone, whatsappJid: conv.whatsappJid }, "No se pudo resolver JID de WhatsApp");
+    return false;
+  }
+  return sendWAMessage(jid, text);
+}
+
+/** @deprecated Usar sendMessageToConversation cuando tengas la conversación */
 export async function sendMessageToPhone(phone: string, text: string): Promise<boolean> {
-  return sendWAMessage(phoneToJid(phone), text);
+  const jid = phoneToJidIfValid(phone);
+  if (!jid) return false;
+  return sendWAMessage(jid, text);
 }
 
 export async function disconnectWA(): Promise<void> {
@@ -141,9 +160,11 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo): Promise<void> 
   // Detectar si es un audio/nota de voz (PTT o audio normal)
   const isAudio = !!msg.message?.audioMessage;
 
-  // Strip @s.whatsapp.net and device suffix (e.g. "573001234567:5@s.whatsapp.net" → "573001234567")
-  const phone = jid.split("@")[0].split(":")[0];
-  const formattedPhone = phone.startsWith("+") ? phone : `+${phone}`;
+  const contact = parseIncomingContact(msg);
+  if (!contact) return;
+
+  const { whatsappJid, phone: formattedPhone } = contact;
+  const phone = formattedPhone.replace(/^\+/, "");
   const pushName = msg.pushName ?? formattedPhone;
 
   let text = "";
@@ -199,6 +220,7 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo): Promise<void> 
         patientId: existingPatient?.id ?? null,
         patientName: existingPatient?.name ?? pushName,
         phone: formattedPhone,
+        whatsappJid,
         status: "active",
         aiMode: true,
         label: "patient",
@@ -230,7 +252,10 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo): Promise<void> 
       lastMessage: text,
       lastMessageAt: new Date(),
       unreadCount: sql`${conversationsTable.unreadCount} + 1`,
+      whatsappJid,
+      phone: formattedPhone,
     }).where(eq(conversationsTable.id, conv.id));
+    conv = { ...conv, whatsappJid, phone: formattedPhone };
 
     // Refresh conversation data to ensure we have the most up-to-date AI mode
     const [latestConv] = await db.select().from(conversationsTable).where(eq(conversationsTable.id, conv.id));
@@ -258,27 +283,28 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo): Promise<void> 
             lastMessageAt: new Date(),
           }).where(eq(conversationsTable.id, conv.id));
 
-    if (sock) {
-      logger.info({ jid, status: _state.status, wasAudio }, "Intentando enviar respuesta IA a WhatsApp...");
+    const outboundJid = conv.whatsappJid ?? whatsappJid;
+    if (sock && outboundJid) {
+      logger.info({ jid: outboundJid, status: _state.status, wasAudio }, "Intentando enviar respuesta IA a WhatsApp...");
       try {
         if (wasAudio) {
-          logger.info({ jid }, "Sintetizando audio (TTS) para responder nota de voz");
+          logger.info({ jid: outboundJid }, "Sintetizando audio (TTS) para responder nota de voz");
           const audioResponse = await synthesizeAudio(aiText);
-          await sock.sendMessage(jid, {
+          await sock.sendMessage(outboundJid, {
             audio: audioResponse.buffer,
             mimetype: audioResponse.mimetype,
             ptt: true,
           });
-          logger.info({ jid, mimetype: audioResponse.mimetype }, "Respuesta IA enviada exitosamente como nota de voz");
+          logger.info({ jid: outboundJid, mimetype: audioResponse.mimetype }, "Respuesta IA enviada exitosamente como nota de voz");
         } else {
-          await sock.sendMessage(jid, { text: aiText });
-          logger.info({ jid, aiText }, "Respuesta IA enviada exitosamente como texto");
+          await sock.sendMessage(outboundJid, { text: aiText });
+          logger.info({ jid: outboundJid, aiText }, "Respuesta IA enviada exitosamente como texto");
         }
       } catch (wsErr) {
-        logger.error({ wsErr, jid }, "Error al enviar mensaje a través de WhatsApp Socket");
+        logger.error({ wsErr, jid: outboundJid }, "Error al enviar mensaje a través de WhatsApp Socket");
       }
     } else {
-      logger.error({ jid, status: _state.status }, "CRÍTICO: No se pudo enviar mensaje porque 'sock' es null");
+      logger.error({ jid: outboundJid, status: _state.status }, "CRÍTICO: No se pudo enviar mensaje (sock o JID inválido)");
     }
         }
         

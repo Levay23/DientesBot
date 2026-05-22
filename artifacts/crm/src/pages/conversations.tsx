@@ -6,6 +6,7 @@ import { useState, useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { Search, Send, Bot, User, Phone } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -34,6 +35,7 @@ export default function Conversations() {
   const [message, setMessage] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
   const queryClient = useQueryClient();
+  const { toast } = useToast();
 
 
   const [lastSynced, setLastSynced] = useState<Date>(new Date());
@@ -63,11 +65,18 @@ export default function Conversations() {
   const handleSend = () => {
     if (!message.trim() || !selectedId) return;
     sendMessage.mutate({ conversationId: selectedId, data: { content: message } }, {
-      onSuccess: () => {
+      onSuccess: (res: { sentToWhatsApp?: boolean; whatsappError?: string | null }) => {
         setMessage("");
         queryClient.invalidateQueries({ queryKey: getGetConversationQueryKey(selectedId) });
         queryClient.invalidateQueries({ queryKey: getGetMessagesQueryKey(selectedId) });
         queryClient.invalidateQueries({ queryKey: getListConversationsQueryKey() });
+        if (res?.sentToWhatsApp === false) {
+          toast({
+            variant: "destructive",
+            title: "No llegó a WhatsApp",
+            description: res.whatsappError ?? "El mensaje quedó guardado en el CRM pero no se envió al teléfono. Pide al contacto que escriba de nuevo al WhatsApp de la clínica.",
+          });
+        }
       }
     });
   };
