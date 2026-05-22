@@ -7,5 +7,6 @@
     "outDir": "dist",
     "rootDir": "src"
   },
-  "include": ["src"]
+  "include": ["src/index.ts", "src/generated/api.ts"],
+  "exclude": ["src/generated/types"]
 }

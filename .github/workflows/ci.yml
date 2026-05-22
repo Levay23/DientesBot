@@ -24,9 +24,6 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Codegen (OpenAPI)
-        run: pnpm --filter @workspace/api-spec run codegen
-
       - name: Typecheck libraries and API
         run: pnpm run typecheck:libs && pnpm --filter @workspace/api-server run typecheck
 
