@@ -12,7 +12,8 @@ import {
 import { generateAIResponse } from "../lib/groq";
 import { getAvailableSlots } from "../lib/appointment-slots";
 import { processAIActions } from "../lib/ai-actions";
-import { sendMessageToConversation, getWAState } from "../lib/whatsapp";
+import { sendMessageToConversation, getWAState, phoneToJid } from "../lib/whatsapp";
+import { phoneToJidIfValid } from "../lib/jid-utils";
 import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
@@ -245,6 +246,28 @@ router.post("/messages/:conversationId", async (req, res): Promise<void> => {
   }
 
   res.status(201).json({ ...msg, sentToWhatsApp, whatsappError });
+});
+
+/** Repara JID cuando el teléfono guardado es un ID interno de WhatsApp (chat antiguo). */
+router.post("/conversations/:id/repair-whatsapp", async (req, res): Promise<void> => {
+  const id = parseInt(Array.isArray(req.params.id) ? req.params.id[0] : req.params.id, 10);
+  if (isNaN(id)) { res.status(400).json({ error: "ID inválido" }); return; }
+
+  const { phone } = req.body as { phone?: string };
+  const wa = getWAState();
+  const targetPhone = phone ?? wa.phone;
+  if (!targetPhone) { res.status(400).json({ error: "Indica un teléfono o conecta WhatsApp" }); return; }
+
+  const jid = phoneToJidIfValid(targetPhone) ?? phoneToJid(targetPhone);
+  const formatted = targetPhone.startsWith("+") ? targetPhone : `+${targetPhone.replace(/\D/g, "")}`;
+
+  const [conv] = await db.update(conversationsTable).set({
+    whatsappJid: jid,
+    phone: formatted,
+  }).where(eq(conversationsTable.id, id)).returning();
+
+  if (!conv) { res.status(404).json({ error: "Conversación no encontrada" }); return; }
+  res.json({ conversation: conv, whatsappJid: jid });
 });
 
 router.post("/conversations/:id/ai-reply", async (req, res): Promise<void> => {
