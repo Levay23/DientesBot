@@ -34,6 +34,18 @@ const statusLabels: Record<string, string> = {
   completed: "Finalizado",
 };
 
+const referralSourceOptions = [
+  { value: "Instagram", label: "Instagram" },
+  { value: "Facebook", label: "Facebook" },
+  { value: "Google", label: "Google" },
+  { value: "WhatsApp", label: "WhatsApp" },
+  { value: "Referido", label: "Referido" },
+  { value: "Diagnóstico de paso", label: "Diagnóstico de paso" },
+  { value: "Diagnóstico de volante", label: "Diagnóstico de volante" },
+  { value: "Diagnóstico de redes sociales", label: "Diagnóstico de redes sociales" },
+  { value: "Otro", label: "Otro" },
+] as const;
+
 type PatientForm = {
   name: string;
   phone: string;
@@ -189,12 +201,11 @@ export default function Patients() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">Todos los orígenes</SelectItem>
-              <SelectItem value="Instagram">Instagram</SelectItem>
-              <SelectItem value="Facebook">Facebook</SelectItem>
-              <SelectItem value="Google">Google</SelectItem>
-              <SelectItem value="Referido">Referido</SelectItem>
-              <SelectItem value="WhatsApp">WhatsApp</SelectItem>
-              <SelectItem value="Otro">Otro</SelectItem>
+              {referralSourceOptions.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
             </SelectContent>
           </Select>
           <div className="flex items-center gap-2">
@@ -341,12 +352,11 @@ export default function Patients() {
                   <SelectValue placeholder="Selecciona una opción" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="Instagram">Instagram</SelectItem>
-                  <SelectItem value="Facebook">Facebook</SelectItem>
-                  <SelectItem value="Google">Google</SelectItem>
-                  <SelectItem value="Referido">Referido</SelectItem>
-                  <SelectItem value="WhatsApp">WhatsApp</SelectItem>
-                  <SelectItem value="Otro">Otro</SelectItem>
+                  {referralSourceOptions.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>

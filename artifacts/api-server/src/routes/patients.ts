@@ -25,6 +25,9 @@ router.get("/patients", async (req, res): Promise<void> => {
           ilike(patientsTable.phone as any, term),
           ilike(patientsTable.email as any, term),
           ilike(patientsTable.treatment as any, term),
+          ilike(patientsTable.neighborhood as any, term),
+          ilike(patientsTable.referralSource as any, term),
+          ilike(patientsTable.city as any, term),
           ilike(patientsTable.notes as any, term),
         ),
       );
