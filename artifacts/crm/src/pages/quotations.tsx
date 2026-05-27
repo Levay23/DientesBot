@@ -9,7 +9,7 @@ import {
 } from "@workspace/api-client-react";
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Plus, FileText, Send, Trash2, Pencil } from "lucide-react";
+import { Plus, FileText, Send, Trash2, Pencil, Search } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -29,6 +29,7 @@ export default function Quotations() {
   const [items, setItems] = useState<QuotationItem[]>([{ service: "", price: 0, quantity: 1 }]);
   const [sending, setSending] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [search, setSearch] = useState("");
   
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -79,6 +80,24 @@ export default function Quotations() {
   };
 
   const total = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+
+  const filteredQuotations = (quotations ?? []).filter(q => {
+    if (!search) return true;
+    const term = search.toLowerCase();
+    const patientName = q.patientName?.toLowerCase() ?? "";
+    const patientPhone = (q as any).patientPhone?.toLowerCase?.() ?? "";
+    const idText = String(q.id);
+    const itemsText = q.items.map(i => i.service).join(" ").toLowerCase();
+    const totalText = q.total.toString();
+
+    return (
+      patientName.includes(term) ||
+      patientPhone.includes(term) ||
+      idText.includes(term) ||
+      itemsText.includes(term) ||
+      totalText.includes(term)
+    );
+  });
 
   const handleCreate = (sendToWhatsApp: boolean) => {
     if (!selectedPatientId) {
@@ -134,16 +153,26 @@ export default function Quotations() {
           </Button>
         </div>
 
+        <div className="relative max-w-md">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder="Buscar por nombre, teléfono, ID o tratamiento..."
+            className="pl-9 bg-card border-border"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+          />
+        </div>
+
         {isLoading ? (
           <div className="space-y-4">{[...Array(3)].map((_, i) => <Skeleton key={i} className="h-24 w-full" />)}</div>
-        ) : !quotations?.length ? (
+        ) : !filteredQuotations.length ? (
           <div className="text-center py-16 text-muted-foreground border-2 border-dashed border-border/50 rounded-xl">
             <FileText className="h-12 w-12 mx-auto mb-3 opacity-20" />
-            <p>No hay presupuestos generados aún</p>
+            <p>No se encontraron presupuestos con ese criterio</p>
           </div>
         ) : (
           <div className="grid gap-4">
-            {quotations.map(q => (
+            {filteredQuotations.map(q => (
               <Card key={q.id} className="bg-card/80 border-border/50 overflow-hidden group">
                 <CardContent className="p-0">
                   <div className="flex items-center justify-between p-4 bg-muted/20">

@@ -16,6 +16,9 @@ export const patientsTable = pgTable("patients", {
   treatmentPrice: integer("treatment_price"),
   diagnosis: text("diagnosis"),
   odontogram: jsonb("odontogram"), // JSON structure for teeth states
+  neighborhood: text("neighborhood"),
+  referralSource: text("referral_source"),
+  city: text("city"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

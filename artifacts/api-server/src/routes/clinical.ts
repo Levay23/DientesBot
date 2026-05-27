@@ -43,6 +43,7 @@ router.get("/clinical/quotations", async (req, res): Promise<void> => {
     id: quotationsTable.id,
     patientId: quotationsTable.patientId,
     patientName: patientsTable.name,
+    patientPhone: patientsTable.phone,
     items: quotationsTable.items,
     total: quotationsTable.total,
     status: quotationsTable.status,

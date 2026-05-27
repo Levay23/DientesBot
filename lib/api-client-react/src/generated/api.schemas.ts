@@ -117,6 +117,9 @@ export interface Patient {
   lastVisit?: string | null;
   nextAppointment?: string | null;
   notes?: string | null;
+   neighborhood?: string | null;
+   referralSource?: string | null;
+   city?: string | null;
   createdAt: string;
 }
 
@@ -309,6 +312,7 @@ export interface Quotation {
   id: number;
   patientId: number;
   patientName?: string;
+  patientPhone?: string;
   items: QuotationItem[];
   total: number;
   status: string;
@@ -467,6 +471,11 @@ export type ListPatientsParams = {
   search?: string;
   status?: string;
   treatment?: string;
+  neighborhood?: string;
+  referralSource?: string;
+  city?: string;
+  minAge?: number;
+  maxAge?: number;
 };
 
 export type ListAppointmentsParams = {

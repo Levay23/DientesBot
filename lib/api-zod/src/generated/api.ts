@@ -138,6 +138,11 @@ export const ListPatientsQueryParams = zod.object({
   search: zod.coerce.string().optional(),
   status: zod.coerce.string().optional(),
   treatment: zod.coerce.string().optional(),
+  neighborhood: zod.coerce.string().optional(),
+  referralSource: zod.coerce.string().optional(),
+  city: zod.coerce.string().optional(),
+  minAge: zod.coerce.number().optional(),
+  maxAge: zod.coerce.number().optional(),
 });
 
 export const ListPatientsResponseItem = zod.object({
@@ -158,6 +163,9 @@ export const ListPatientsResponseItem = zod.object({
   lastVisit: zod.coerce.date().nullish(),
   nextAppointment: zod.coerce.date().nullish(),
   notes: zod.string().nullish(),
+  neighborhood: zod.string().nullish(),
+  referralSource: zod.string().nullish(),
+  city: zod.string().nullish(),
   createdAt: zod.coerce.date(),
 });
 export const ListPatientsResponse = zod.array(ListPatientsResponseItem);
@@ -182,6 +190,9 @@ export const CreatePatientBody = zod.object({
     ])
     .optional(),
   notes: zod.string().optional(),
+  neighborhood: zod.string().optional(),
+  referralSource: zod.string().optional(),
+  city: zod.string().optional(),
 });
 
 /**
@@ -236,6 +247,9 @@ export const UpdatePatientBody = zod.object({
     ])
     .optional(),
   notes: zod.string().optional(),
+  neighborhood: zod.string().optional(),
+  referralSource: zod.string().optional(),
+  city: zod.string().optional(),
 });
 
 export const UpdatePatientResponse = zod.object({
@@ -865,6 +879,7 @@ export const ListQuotationsResponseItem = zod.object({
   id: zod.number(),
   patientId: zod.number(),
   patientName: zod.string().optional(),
+  patientPhone: zod.string().optional(),
   items: zod.array(
     zod.object({
       service: zod.string(),

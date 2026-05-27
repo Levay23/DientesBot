@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { db, patientsTable, appointmentsTable } from "@workspace/db";
-import { eq, ilike, and, sql } from "drizzle-orm";
+import { eq, ilike, and, sql, gte, lte, or } from "drizzle-orm";
 import {
   CreatePatientBody,
   UpdatePatientBody,
@@ -17,9 +17,25 @@ router.get("/patients", async (req, res): Promise<void> => {
   const conditions = [];
 
   if (query.success) {
-    if (query.data.search) conditions.push(ilike(patientsTable.name, `%${query.data.search}%`));
+    if (query.data.search) {
+      const term = `%${query.data.search}%`;
+      conditions.push(
+        or(
+          ilike(patientsTable.name, term),
+          ilike(patientsTable.phone as any, term),
+          ilike(patientsTable.email as any, term),
+          ilike(patientsTable.treatment as any, term),
+          ilike(patientsTable.notes as any, term),
+        ),
+      );
+    }
     if (query.data.status) conditions.push(eq(patientsTable.status, query.data.status));
     if (query.data.treatment) conditions.push(ilike(patientsTable.treatment as any, `%${query.data.treatment}%`));
+    if (query.data.neighborhood) conditions.push(ilike(patientsTable.neighborhood as any, `%${query.data.neighborhood}%`));
+    if (query.data.referralSource) conditions.push(ilike(patientsTable.referralSource as any, `%${query.data.referralSource}%`));
+    if (query.data.city) conditions.push(ilike(patientsTable.city as any, `%${query.data.city}%`));
+    if (typeof query.data.minAge === "number") conditions.push(gte(patientsTable.age as any, query.data.minAge));
+    if (typeof query.data.maxAge === "number") conditions.push(lte(patientsTable.age as any, query.data.maxAge));
   }
 
   const patients = await db

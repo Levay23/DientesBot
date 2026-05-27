@@ -44,17 +44,25 @@ type PatientForm = {
   notes: string;
   medicalHistory: string;
   treatmentPrice: string;
+  neighborhood: string;
+  referralSource: string;
+  city: string;
 };
 
 const emptyForm: PatientForm = {
   name: "", phone: "", email: "", age: "", treatment: "", status: "new", notes: "",
-  medicalHistory: "", treatmentPrice: ""
+  medicalHistory: "", treatmentPrice: "", neighborhood: "", referralSource: "", city: ""
 };
 
 
 export default function Patients() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [neighborhoodFilter, setNeighborhoodFilter] = useState("");
+  const [referralFilter, setReferralFilter] = useState("");
+  const [minAgeFilter, setMinAgeFilter] = useState("");
+  const [maxAgeFilter, setMaxAgeFilter] = useState("");
+  const [cityFilter, setCityFilter] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [clinicalPatient, setClinicalPatient] = useState<any | null>(null);
@@ -66,6 +74,11 @@ export default function Patients() {
   const params = {
     search: search || undefined,
     status: statusFilter !== "all" ? statusFilter : undefined,
+    neighborhood: neighborhoodFilter || undefined,
+    referralSource: referralFilter || undefined,
+    city: cityFilter || undefined,
+    minAge: minAgeFilter ? parseInt(minAgeFilter) || undefined : undefined,
+    maxAge: maxAgeFilter ? parseInt(maxAgeFilter) || undefined : undefined,
   };
 
   const { data: patients, isLoading } = useListPatients(params, {
@@ -88,7 +101,10 @@ export default function Patients() {
       status: p.status,
       notes: p.notes ?? "",
       medicalHistory: p.medicalHistory ?? "",
-      treatmentPrice: p.treatmentPrice?.toString() ?? ""
+      treatmentPrice: p.treatmentPrice?.toString() ?? "",
+      neighborhood: p.neighborhood ?? "",
+      referralSource: p.referralSource ?? "",
+      city: p.city ?? "",
     });
     setEditingId(p.id);
     setDialogOpen(true);
@@ -106,6 +122,9 @@ export default function Patients() {
       notes: form.notes || undefined,
       medicalHistory: form.medicalHistory || undefined,
       treatmentPrice: form.treatmentPrice ? parseInt(form.treatmentPrice) : undefined,
+      neighborhood: form.neighborhood || undefined,
+      referralSource: form.referralSource || undefined,
+      city: form.city || undefined,
     };
 
     if (editingId) {
@@ -141,7 +160,7 @@ export default function Patients() {
           </Button>
         </div>
 
-        <div className="flex gap-3">
+        <div className="flex flex-wrap gap-3">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input placeholder="Buscar por nombre..." className="pl-9 bg-card border-border" value={search} onChange={e => setSearch(e.target.value)} />
@@ -155,6 +174,51 @@ export default function Patients() {
               {Object.entries(statusLabels).map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}
             </SelectContent>
           </Select>
+          <Input
+            placeholder="Barrio"
+            className="w-40 bg-card border-border"
+            value={neighborhoodFilter}
+            onChange={e => setNeighborhoodFilter(e.target.value)}
+          />
+          <Select
+            value={referralFilter || "all"}
+            onValueChange={v => setReferralFilter(v === "all" ? "" : v)}
+          >
+            <SelectTrigger className="w-40 bg-card border-border">
+              <SelectValue placeholder="Cómo llegó" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todos los orígenes</SelectItem>
+              <SelectItem value="Instagram">Instagram</SelectItem>
+              <SelectItem value="Facebook">Facebook</SelectItem>
+              <SelectItem value="Google">Google</SelectItem>
+              <SelectItem value="Referido">Referido</SelectItem>
+              <SelectItem value="WhatsApp">WhatsApp</SelectItem>
+              <SelectItem value="Otro">Otro</SelectItem>
+            </SelectContent>
+          </Select>
+          <div className="flex items-center gap-2">
+            <Input
+              placeholder="Edad mín."
+              type="number"
+              className="w-24 bg-card border-border"
+              value={minAgeFilter}
+              onChange={e => setMinAgeFilter(e.target.value)}
+            />
+            <Input
+              placeholder="Edad máx."
+              type="number"
+              className="w-24 bg-card border-border"
+              value={maxAgeFilter}
+              onChange={e => setMaxAgeFilter(e.target.value)}
+            />
+          </div>
+          <Input
+            placeholder="Ciudad / Ubicación"
+            className="w-44 bg-card border-border"
+            value={cityFilter}
+            onChange={e => setCityFilter(e.target.value)}
+          />
         </div>
 
         {isLoading ? (
@@ -257,6 +321,43 @@ export default function Patients() {
             <div className="col-span-2 space-y-1">
               <Label>Tratamiento de interés</Label>
               <Input value={form.treatment} onChange={e => setForm(f => ({ ...f, treatment: e.target.value }))} className="bg-background" placeholder="Ej: Implantes, Prótesis removible..." />
+            </div>
+            <div className="space-y-1">
+              <Label>Barrio</Label>
+              <Input
+                value={form.neighborhood}
+                onChange={e => setForm(f => ({ ...f, neighborhood: e.target.value }))}
+                className="bg-background"
+                placeholder="Ej: Laureles"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label>Cómo llegó a la clínica</Label>
+              <Select
+                value={form.referralSource}
+                onValueChange={v => setForm(f => ({ ...f, referralSource: v }))}
+              >
+                <SelectTrigger className="bg-background">
+                  <SelectValue placeholder="Selecciona una opción" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="Instagram">Instagram</SelectItem>
+                  <SelectItem value="Facebook">Facebook</SelectItem>
+                  <SelectItem value="Google">Google</SelectItem>
+                  <SelectItem value="Referido">Referido</SelectItem>
+                  <SelectItem value="WhatsApp">WhatsApp</SelectItem>
+                  <SelectItem value="Otro">Otro</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label>Ciudad / Ubicación</Label>
+              <Input
+                value={form.city}
+                onChange={e => setForm(f => ({ ...f, city: e.target.value }))}
+                className="bg-background"
+                placeholder="Ej: Medellín"
+              />
             </div>
             <div className="col-span-2 space-y-1">
               <Label>Notas Generales</Label>
