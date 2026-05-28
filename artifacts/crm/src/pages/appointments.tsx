@@ -173,7 +173,7 @@ export default function Appointments() {
         {isLoading ? (
           <div className="space-y-3">{[...Array(3)].map((_, i) => <Skeleton key={i} className="h-20 w-full" />)}</div>
         ) : view === "day" ? (
-          <div className="space-y-3">
+          <div className="max-h-[calc(100vh-16rem)] min-h-[12rem] overflow-y-auto space-y-3 pr-1">
             {!(apptsByDate[dateStr]?.length) ? (
               <div className="text-center py-16 text-muted-foreground">
                 <p className="font-medium">No hay citas para este día</p>
@@ -262,18 +262,29 @@ export default function Appointments() {
             )}
           </div>
         ) : (
-          <div className="grid grid-cols-7 gap-2">
+          <div className="grid grid-cols-7 gap-2 h-[calc(100vh-16rem)] min-h-[20rem]">
             {weekDays.map((day, i) => {
               const ds = day.toISOString().slice(0, 10);
-              const dayAppts = apptsByDate[ds] ?? [];
+              const dayAppts = (apptsByDate[ds] ?? []).sort((a, b) => a.startTime.localeCompare(b.startTime));
               const isToday = ds === new Date().toISOString().slice(0, 10);
               return (
-                <div key={i} className={cn("rounded-xl border p-2 min-h-36", isToday ? "border-accent/50 bg-accent/5" : "border-border/50 bg-card/50")}>
-                  <p className={cn("text-xs font-semibold mb-2 capitalize", isToday ? "text-accent" : "text-muted-foreground")}>
+                <div
+                  key={i}
+                  className={cn(
+                    "rounded-xl border p-2 flex flex-col min-h-0 min-w-0",
+                    isToday ? "border-accent/50 bg-accent/5" : "border-border/50 bg-card/50",
+                  )}
+                >
+                  <p className={cn("text-xs font-semibold mb-2 capitalize shrink-0", isToday ? "text-accent" : "text-muted-foreground")}>
                     {day.toLocaleDateString("es-CO", { weekday: "short", day: "numeric" })}
+                    {dayAppts.length > 0 && (
+                      <span className="ml-1 text-[10px] font-normal opacity-70">({dayAppts.length})</span>
+                    )}
                   </p>
-                  <div className="space-y-1">
-                    {dayAppts.map(a => (
+                  <div className="flex-1 min-h-0 overflow-y-auto space-y-1 pr-0.5">
+                    {dayAppts.length === 0 ? (
+                      <p className="text-[10px] text-muted-foreground/50 text-center py-2">Sin citas</p>
+                    ) : dayAppts.map(a => (
                       <div
                         key={a.id}
                         className="text-xs p-1.5 rounded-md bg-primary/20 text-primary-foreground/90 cursor-pointer hover:bg-primary/30"
