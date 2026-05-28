@@ -36,6 +36,15 @@ const triggerColors: Record<string, string> = {
 type AutoForm = { name: string; trigger: string; message: string; delayHours: string; active: boolean };
 const emptyForm: AutoForm = { name: "", trigger: "appointment_reminder", message: "", delayHours: "24", active: true };
 
+const delayHelp: Record<string, string> = {
+  appointment_reminder: "Horas antes de la cita (ej. 24 = recordatorio un día antes)",
+  new_patient_welcome: "Horas después de registrar al paciente (0 = casi al instante)",
+  follow_up: "Horas después de que termina la cita completada",
+  appointment_confirmed: "No aplica — se envía al confirmar la cita en Agenda",
+  missed_appointment: "Horas después de la hora de la cita si no asistió",
+  reactivation: "Horas sin cita futura desde registro (720 ≈ 30 días)",
+};
+
 const TEMPLATES = [
   {
     name: "Recordatorio 24h",
@@ -140,7 +149,9 @@ export default function Automations() {
                           <Badge className={`text-xs ${triggerColors[a.trigger] ?? "bg-muted text-muted-foreground"}`}>
                             {triggerLabels[a.trigger] ?? a.trigger}
                           </Badge>
-                          {a.delayHours != null && <span className="text-xs text-muted-foreground">· {a.delayHours}h de retraso</span>}
+                          {a.delayHours != null && a.trigger !== "appointment_confirmed" && (
+                            <span className="text-xs text-muted-foreground">· {a.delayHours}h</span>
+                          )}
                         </div>
                         <p className="text-sm text-muted-foreground line-clamp-2">{a.message}</p>
                         <p className="text-xs text-muted-foreground mt-1.5">Ejecutada {a.executionCount} veces</p>
@@ -183,10 +194,17 @@ export default function Automations() {
                 <SelectContent>{Object.entries(triggerLabels).map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}</SelectContent>
               </Select>
             </div>
-            <div className="space-y-1">
-              <Label>Retraso (horas)</Label>
-              <Input type="number" value={form.delayHours} onChange={e => setForm(f => ({ ...f, delayHours: e.target.value }))} className="bg-background" placeholder="Ej: 24" />
-            </div>
+            {form.trigger !== "appointment_confirmed" && (
+              <div className="space-y-1">
+                <Label>Tiempo (horas)</Label>
+                <Input type="number" value={form.delayHours} onChange={e => setForm(f => ({ ...f, delayHours: e.target.value }))} className="bg-background" placeholder="Ej: 24" />
+                <p className="text-xs text-muted-foreground">{delayHelp[form.trigger] ?? "Tiempo en horas según el tipo de automatización"}</p>
+              </div>
+            )}
+            <p className="text-xs text-muted-foreground bg-muted/30 rounded-lg p-3">
+              El servidor revisa cada 15 minutos. WhatsApp debe estar <strong>Conectado</strong> en la sección WhatsApp.
+              Cada paciente/cita recibe el mensaje una sola vez por automatización.
+            </p>
             <div className="space-y-1">
               <Label>Mensaje *</Label>
               <Textarea

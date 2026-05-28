@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import { db, appointmentsTable, patientsTable, settingsTable } from "@workspace/db";
 import { eq, and, sql } from "drizzle-orm";
+import { runAppointmentConfirmedAutomations } from "../lib/automations-engine";
 import {
   CreateAppointmentBody,
   UpdateAppointmentBody,
@@ -199,6 +200,9 @@ router.put("/appointments/:id", async (req, res): Promise<void> => {
   const parsed = UpdateAppointmentBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
 
+  const [previous] = await db.select().from(appointmentsTable).where(eq(appointmentsTable.id, params.data.id));
+  if (!previous) { res.status(404).json({ error: "Appointment not found" }); return; }
+
   const updateData: Record<string, unknown> = { ...parsed.data };
   if (parsed.data.startTime && parsed.data.duration) {
     updateData.endTime = addMinutes(parsed.data.startTime, parsed.data.duration);
@@ -212,6 +216,25 @@ router.put("/appointments/:id", async (req, res): Promise<void> => {
   await syncPatientStatus(appt.patientId);
   
   const [patient] = await db.select().from(patientsTable).where(eq(patientsTable.id, appt.patientId));
+
+  if (
+    parsed.data.status === "confirmed"
+    && previous.status !== "confirmed"
+    && patient
+  ) {
+    runAppointmentConfirmedAutomations({
+      id: appt.id,
+      date: appt.date,
+      startTime: appt.startTime,
+      endTime: appt.endTime,
+      status: appt.status,
+      patientId: appt.patientId,
+      patientName: patient.name,
+      patientPhone: patient.phone,
+      treatment: appt.treatment,
+    }).catch(() => undefined);
+  }
+
   res.json({ ...appt, patientName: patient?.name ?? "", patientPhone: patient?.phone ?? "" });
 });
 
