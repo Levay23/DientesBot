@@ -234,6 +234,11 @@ ACCIONES DISPONIBLES (JSON):
 - updatePhone: {"phone":"numero sin espacios"}
 - updateStatus: {"status":"interested"}
 
+REGLA CRÍTICA DE AGENDA:
+- Si confirmas al paciente una cita (fecha y hora), SIEMPRE debes incluir bookAppointment en "actions" con la fecha YYYY-MM-DD y startTime en 24h (ej. 17:00 para 5:00 p.m.).
+- Sin bookAppointment la cita NO aparece en el calendario de la clínica aunque lo digas en el mensaje.
+- Si el paciente aún no está registrado, incluye registerPatient en el mismo JSON antes de agendar.
+
 FORMATO JSON:
 {"message":"tu respuesta","actions":{...}}`;
 

@@ -28,6 +28,16 @@ function to12h(time24: string): string {
   return `${h}:${m} ${ampm}`;
 }
 
+/** Fecha YYYY-MM-DD en zona horaria Colombia (evita desfase con toISOString UTC) */
+function formatColombiaDate(d: Date): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Bogota",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(d);
+}
+
 const statusColors: Record<string, string> = {
   scheduled: "bg-blue-500/20 text-blue-300",
   confirmed: "bg-green-500/20 text-green-300",
@@ -61,7 +71,7 @@ type AppointmentForm = {
 };
 
 const emptyForm: AppointmentForm = {
-  patientId: "", treatment: "", date: new Date().toISOString().slice(0, 10),
+  patientId: "", treatment: "", date: formatColombiaDate(new Date()),
   startTime: "09:00", duration: "60", notes: "",
 };
 
@@ -75,7 +85,8 @@ export default function Appointments() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
-  const dateStr = currentDate.toISOString().slice(0, 10);
+  const dateStr = formatColombiaDate(currentDate);
+  const todayStr = formatColombiaDate(new Date());
 
   const { data: appointments, isLoading } = useListAppointments(
     { date: view === "day" ? dateStr : undefined },
@@ -262,26 +273,26 @@ export default function Appointments() {
             )}
           </div>
         ) : (
-          <div className="grid grid-cols-7 gap-2 h-[calc(100vh-16rem)] min-h-[20rem]">
+          <div className="flex gap-2 h-[calc(100vh-16rem)] min-h-[20rem] max-h-[calc(100vh-16rem)] overflow-hidden">
             {weekDays.map((day, i) => {
-              const ds = day.toISOString().slice(0, 10);
+              const ds = formatColombiaDate(day);
               const dayAppts = (apptsByDate[ds] ?? []).sort((a, b) => a.startTime.localeCompare(b.startTime));
-              const isToday = ds === new Date().toISOString().slice(0, 10);
+              const isToday = ds === todayStr;
               return (
                 <div
                   key={i}
                   className={cn(
-                    "rounded-xl border p-2 flex flex-col min-h-0 min-w-0",
+                    "flex-1 min-w-0 h-full rounded-xl border p-2 flex flex-col overflow-hidden",
                     isToday ? "border-accent/50 bg-accent/5" : "border-border/50 bg-card/50",
                   )}
                 >
                   <p className={cn("text-xs font-semibold mb-2 capitalize shrink-0", isToday ? "text-accent" : "text-muted-foreground")}>
-                    {day.toLocaleDateString("es-CO", { weekday: "short", day: "numeric" })}
+                    {day.toLocaleDateString("es-CO", { weekday: "short", day: "numeric", timeZone: "America/Bogota" })}
                     {dayAppts.length > 0 && (
                       <span className="ml-1 text-[10px] font-normal opacity-70">({dayAppts.length})</span>
                     )}
                   </p>
-                  <div className="flex-1 min-h-0 overflow-y-auto space-y-1 pr-0.5">
+                  <div className="flex-1 min-h-0 overflow-y-auto overscroll-y-contain space-y-1 pr-1">
                     {dayAppts.length === 0 ? (
                       <p className="text-[10px] text-muted-foreground/50 text-center py-2">Sin citas</p>
                     ) : dayAppts.map(a => (

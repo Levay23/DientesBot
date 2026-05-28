@@ -9,6 +9,33 @@ function addMinutes(time: string, minutes: number): string {
   return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
 }
 
+/** Convierte hora a HH:MM 24h (acepta 17:00, 5:00 p.m., 5pm, etc.) */
+function normalizeStartTime(raw: string): string | null {
+  const t = raw.trim().toLowerCase();
+  const m24 = t.match(/^(\d{1,2}):(\d{2})$/);
+  if (m24) {
+    const h = parseInt(m24[1], 10);
+    const min = parseInt(m24[2], 10);
+    if (h >= 0 && h <= 23 && min >= 0 && min <= 59) {
+      return `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
+    }
+  }
+  const m12 = t.match(/^(\d{1,2})(?::(\d{2}))?\s*(a\.?\s*m\.?|p\.?\s*m\.?|am|pm)$/i)
+    ?? t.match(/^(\d{1,2}):(\d{2})\s*(a\.?\s*m\.?|p\.?\s*m\.?|am|pm)$/i);
+  if (m12) {
+    let h = parseInt(m12[1], 10);
+    const min = parseInt(m12[2] ?? "0", 10);
+    const period = (m12[3] ?? m12[4] ?? "").replace(/\s/g, "");
+    const isPm = period.startsWith("p");
+    if (h === 12) h = isPm ? 12 : 0;
+    else if (isPm) h += 12;
+    if (h >= 0 && h <= 23 && min >= 0 && min <= 59) {
+      return `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
+    }
+  }
+  return null;
+}
+
 export interface ConversationRef {
   id: number;
   patientId: number | null;
@@ -105,16 +132,46 @@ export async function processAIActions(
 
   if (bookAppointment?.date && bookAppointment.startTime) {
     try {
+      const startTime = normalizeStartTime(bookAppointment.startTime);
+      if (!startTime) {
+        logger.warn({ raw: bookAppointment.startTime }, "Cita rechazada: hora inválida");
+        return { conversation: current };
+      }
+
       let patientId = current.patientId;
       if (!patientId) {
         const [existingByPhone] = await db.select().from(patientsTable).where(eq(patientsTable.phone, formattedPhone));
         patientId = existingByPhone?.id ?? null;
       }
 
+      if (!patientId && current.patientName?.trim()) {
+        const cleanName = current.patientName.replace(/[^\p{L}\p{N}\s]/gu, "").trim() || current.patientName.trim();
+        const [existingByPhone] = await db.select().from(patientsTable).where(eq(patientsTable.phone, formattedPhone));
+        if (existingByPhone) {
+          patientId = existingByPhone.id;
+          await db.update(conversationsTable).set({ patientId }).where(eq(conversationsTable.id, current.id));
+          current = { ...current, patientId };
+        } else {
+          const [newPatient] = await db.insert(patientsTable).values({
+            name: cleanName,
+            phone: formattedPhone,
+            treatment: bookAppointment.treatment || "Consulta general",
+            status: "new",
+          }).returning();
+          patientId = newPatient.id;
+          await db.update(conversationsTable).set({
+            patientId,
+            patientName: cleanName,
+          }).where(eq(conversationsTable.id, current.id));
+          current = { ...current, patientId, patientName: cleanName };
+          logger.info({ patientId, name: cleanName, source }, "Paciente auto-creado para agendar cita por IA");
+        }
+      }
+
       if (patientId) {
         const [settings] = await db.select().from(settingsTable).limit(1);
         const duration = settings?.defaultAppointmentDuration ?? 60;
-        const endTime = addMinutes(bookAppointment.startTime, duration);
+        const endTime = addMinutes(startTime, duration);
 
         try {
           await db.transaction(async (tx) => {
@@ -124,7 +181,7 @@ export async function processAIActions(
                 sql`${appointmentsTable.status} != 'cancelled'`,
               ));
             const hasSlotConflict = slotConflicts.some(
-              a => !(a.endTime <= bookAppointment.startTime || a.startTime >= endTime),
+              a => !(a.endTime <= startTime || a.startTime >= endTime),
             );
 
             const patientConflicts = await tx.select().from(appointmentsTable)
@@ -146,7 +203,7 @@ export async function processAIActions(
               patientId,
               treatment: bookAppointment.treatment || "Consulta general",
               date: bookAppointment.date,
-              startTime: bookAppointment.startTime,
+              startTime,
               endTime,
               status: "scheduled",
               notes: apptNotes,
