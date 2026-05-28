@@ -1,5 +1,5 @@
 import Layout from "@/components/layout";
-import { useListAppointments, useCreateAppointment, useUpdateAppointment, useDeleteAppointment, useListPatients, getListAppointmentsQueryKey } from "@workspace/api-client-react";
+import { useListAppointments, useCreateAppointment, useUpdateAppointment, useDeleteAppointment, useListPatients, useListTreatments, getListAppointmentsQueryKey } from "@workspace/api-client-react";
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Plus, ChevronLeft, ChevronRight, Check, ChevronsUpDown } from "lucide-react";
@@ -54,11 +54,9 @@ const statusLabels: Record<string, string> = {
   no_show: "No asistió",
 };
 
-const TREATMENTS = [
-  "Implantes dentales", "Diseño de sonrisa", "Ortodoncia", "Blanqueamiento",
-  "Carillas", "Prótesis fija", "Prótesis removible", "Valoración general", "Limpieza dental",
-  "Extracción", "Endodoncia", "Periodoncia",
-];
+function formatPriceCop(price: number) {
+  return new Intl.NumberFormat("es-CO", { style: "currency", currency: "COP", minimumFractionDigits: 0 }).format(price);
+}
 
 type AppointmentForm = {
   patientId: string;
@@ -93,6 +91,10 @@ export default function Appointments() {
     { query: { queryKey: getListAppointmentsQueryKey({ date: view === "day" ? dateStr : undefined }) } }
   );
   const { data: patients } = useListPatients();
+  const { data: catalogTreatments } = useListTreatments();
+  const activeTreatments = (catalogTreatments ?? [])
+    .filter(t => t.active)
+    .sort((a, b) => a.name.localeCompare(b.name, "es"));
   const createAppointment = useCreateAppointment();
   const updateAppointment = useUpdateAppointment();
   const deleteAppointment = useDeleteAppointment();
@@ -375,10 +377,37 @@ export default function Appointments() {
             </div>
             <div className="col-span-2 space-y-1">
               <Label>Tratamiento *</Label>
-              <Select value={form.treatment} onValueChange={v => setForm(f => ({ ...f, treatment: v }))}>
+              <Select
+                value={form.treatment}
+                onValueChange={v => {
+                  const selected = activeTreatments.find(t => t.name === v);
+                  setForm(f => ({
+                    ...f,
+                    treatment: v,
+                    duration: selected?.duration ? String(selected.duration) : f.duration,
+                  }));
+                }}
+              >
                 <SelectTrigger className="bg-background"><SelectValue placeholder="Seleccionar tratamiento" /></SelectTrigger>
-                <SelectContent>{TREATMENTS.map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
+                <SelectContent className="max-h-[320px]">
+                  {activeTreatments.length ? activeTreatments.map(t => (
+                    <SelectItem key={t.id} value={t.name}>
+                      <span className="flex flex-col items-start gap-0.5">
+                        <span>{t.name}</span>
+                        <span className="text-[10px] text-muted-foreground">{formatPriceCop(t.price)} · {t.duration} min</span>
+                      </span>
+                    </SelectItem>
+                  )) : (
+                    <SelectItem value="Valoración general">Valoración general</SelectItem>
+                  )}
+                </SelectContent>
               </Select>
+              {form.treatment && (() => {
+                const sel = activeTreatments.find(t => t.name === form.treatment);
+                return sel ? (
+                  <p className="text-xs text-accent">Referencia: {formatPriceCop(sel.price)}</p>
+                ) : null;
+              })()}
             </div>
             <div className="space-y-1">
               <Label>Fecha *</Label>

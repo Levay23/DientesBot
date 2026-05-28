@@ -10,8 +10,11 @@ import {
 
 const router: IRouter = Router();
 
-router.get("/treatments", async (_req, res): Promise<void> => {
-  const treatments = await db.select().from(treatmentsTable).orderBy(treatmentsTable.name);
+router.get("/treatments", async (req, res): Promise<void> => {
+  const activeOnly = req.query.activeOnly === "true" || req.query.activeOnly === "1";
+  const treatments = activeOnly
+    ? await db.select().from(treatmentsTable).where(eq(treatmentsTable.active, true)).orderBy(treatmentsTable.name)
+    : await db.select().from(treatmentsTable).orderBy(treatmentsTable.name);
   res.json(treatments.map(t => ({ ...t, price: parseFloat(t.price) })));
 });
 

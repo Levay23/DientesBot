@@ -332,15 +332,19 @@ async function seed() {
   const existingTreatments = await db.select().from(treatmentsTable);
   if (existingTreatments.length === 0) {
     const defaultServices = [
-      { name: "Valoración Inicial", price: "0", duration: 30 },
-      { name: "Limpieza Profunda (Profilaxis)", price: "120000", duration: 45 },
-      { name: "Resina de Alta Estética (Calza)", price: "150000", duration: 60 },
-      { name: "Blanqueamiento Dental LED", price: "450000", duration: 60 },
-      { name: "Extracción Dental Simple", price: "100000", duration: 45 },
-      { name: "Diseño de Sonrisa (Carilla)", price: "600000", duration: 120 },
-      { name: "Tratamiento de Conducto (Endodoncia)", price: "350000", duration: 90 },
-      { name: "Corona en Zirconio", price: "1200000", duration: 60 },
-      { name: "Implante Dental (Solo Fase Quirúrgica)", price: "2500000", duration: 90 },
+      { name: "Implantes dentales", price: "3500000", duration: 90, description: "Implante + valoración", active: true },
+      { name: "Diseño de sonrisa", price: "3000000", duration: 120, active: true },
+      { name: "Ortodoncia", price: "2500000", duration: 60, active: true },
+      { name: "Blanqueamiento", price: "450000", duration: 60, active: true },
+      { name: "Carillas", price: "800000", duration: 90, active: true },
+      { name: "Prótesis fija", price: "1200000", duration: 60, active: true },
+      { name: "Prótesis removible", price: "1500000", duration: 60, active: true },
+      { name: "Valoración general", price: "80000", duration: 30, active: true },
+      { name: "Limpieza dental", price: "120000", duration: 45, active: true },
+      { name: "Resina", price: "150000", duration: 60, description: "Obturación / calza estética", active: true },
+      { name: "Extracción", price: "200000", duration: 45, active: true },
+      { name: "Endodoncia", price: "350000", duration: 90, active: true },
+      { name: "Periodoncia", price: "250000", duration: 60, active: true },
     ];
     await db.insert(treatmentsTable).values(defaultServices as any);
     console.log(`✅ ${defaultServices.length} servicios añadidos al catálogo.`);

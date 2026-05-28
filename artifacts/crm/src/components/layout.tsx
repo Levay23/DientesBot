@@ -14,6 +14,7 @@ import {
   MoreHorizontal,
   X,
   FileText,
+  Syringe,
 } from "lucide-react";
 import { Button } from "./ui/button";
 import { cn } from "@/lib/utils";
@@ -26,6 +27,7 @@ const mainNav = [
   { href: "/dashboard", label: "Panel", icon: LayoutDashboard },
   { href: "/patients", label: "Pacientes", icon: Users },
   { href: "/appointments", label: "Agenda", icon: CalendarIcon },
+  { href: "/treatments", label: "Tratamientos", icon: Syringe },
   { href: "/quotations", label: "Presupuestos", icon: FileText },
   { href: "/conversations", label: "Chat", icon: MessageSquare },
 ];
