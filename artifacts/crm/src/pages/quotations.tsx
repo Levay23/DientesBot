@@ -4,10 +4,11 @@ import {
   useListQuotations, 
   useCreateQuotation, 
   useUpdateQuotation, 
+  useListTreatments,
   getListQuotationsQueryKey,
   customFetch
 } from "@workspace/api-client-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Plus, FileText, Send, Trash2, Pencil, Search } from "lucide-react";
 
@@ -23,6 +24,10 @@ import { useToast } from "@/hooks/use-toast";
 
 type QuotationItem = { service: string; price: number; quantity: number };
 
+function formatPriceCop(price: number) {
+  return new Intl.NumberFormat("es-CO", { style: "currency", currency: "COP", minimumFractionDigits: 0 }).format(price);
+}
+
 export default function Quotations() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [selectedPatientId, setSelectedPatientId] = useState<string>("");
@@ -30,12 +35,25 @@ export default function Quotations() {
   const [sending, setSending] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [search, setSearch] = useState("");
+  const [customServiceRows, setCustomServiceRows] = useState<Set<number>>(new Set());
   
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
   const { data: patients } = useListPatients();
+  const { data: catalogTreatments } = useListTreatments();
   const { data: quotations, isLoading } = useListQuotations();
+
+  const activeTreatments = useMemo(
+    () => (catalogTreatments ?? []).filter(t => t.active).sort((a, b) => a.name.localeCompare(b.name, "es")),
+    [catalogTreatments],
+  );
+
+  const treatmentPriceByName = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const t of activeTreatments) map.set(t.name.toLowerCase(), Math.round(t.price));
+    return map;
+  }, [activeTreatments]);
   const createQuotation = useCreateQuotation();
   const updateQuotation = useUpdateQuotation();
 
@@ -43,20 +61,48 @@ export default function Quotations() {
 
   const addItem = () => setItems([...items, { service: "", price: 0, quantity: 1 }]);
   const removeItem = (idx: number) => setItems(items.filter((_, i) => i !== idx));
-  const updateItem = (idx: number, field: keyof QuotationItem, value: any) => {
+  const updateItem = (idx: number, field: keyof QuotationItem, value: string | number) => {
     const newItems = [...items];
-    let finalValue = value;
+    let finalValue: string | number = value;
     if (field === "price" || field === "quantity") {
-      finalValue = parseInt(value) || 0;
+      finalValue = typeof value === "number" ? value : parseInt(String(value), 10) || 0;
     }
     newItems[idx] = { ...newItems[idx], [field]: finalValue };
     setItems(newItems);
   };
 
+  const selectCatalogTreatment = (idx: number, treatmentName: string) => {
+    if (treatmentName === "__custom__") {
+      setCustomServiceRows(prev => new Set(prev).add(idx));
+      return;
+    }
+    const catalog = activeTreatments.find(t => t.name === treatmentName);
+    const newItems = [...items];
+    newItems[idx] = {
+      ...newItems[idx],
+      service: treatmentName,
+      price: catalog ? Math.round(catalog.price) : newItems[idx].price,
+    };
+    setItems(newItems);
+    setCustomServiceRows(prev => {
+      const next = new Set(prev);
+      next.delete(idx);
+      return next;
+    });
+  };
+
   const openEdit = (q: any) => {
     setEditingId(q.id);
     setSelectedPatientId(q.patientId.toString());
-    setItems(q.items.map((i: any) => ({ ...i, quantity: i.quantity || 1 })));
+    const mapped = q.items.map((i: any) => ({ ...i, quantity: i.quantity || 1 }));
+    setItems(mapped);
+    const custom = new Set<number>();
+    mapped.forEach((item: QuotationItem, idx: number) => {
+      if (item.service && !treatmentPriceByName.has(item.service.toLowerCase())) {
+        custom.add(idx);
+      }
+    });
+    setCustomServiceRows(custom);
     setDialogOpen(true);
   };
 
@@ -65,6 +111,7 @@ export default function Quotations() {
     setEditingId(null);
     setItems([{ service: "", price: 0, quantity: 1 }]);
     setSelectedPatientId("");
+    setCustomServiceRows(new Set());
   };
 
   const handleDelete = async (id: number) => {
@@ -252,13 +299,52 @@ export default function Quotations() {
                 {items.map((item, idx) => (
                   <div key={idx} className="flex gap-2 items-end bg-muted/5 p-3 rounded-lg border border-border/30 relative group/row">
                     <div className="flex-[3] space-y-1.5">
-                      <Label className="text-[10px] text-muted-foreground ml-1">Servicio</Label>
-                      <Input 
-                        placeholder="Escribe el servicio..." 
-                        value={item.service} 
-                        onChange={e => updateItem(idx, "service", e.target.value)}
-                        className="bg-background"
-                      />
+                      <Label className="text-[10px] text-muted-foreground ml-1">Tratamiento / Servicio</Label>
+                      {customServiceRows.has(idx) ? (
+                        <div className="space-y-1">
+                          <Input
+                            placeholder="Nombre del servicio..."
+                            value={item.service}
+                            onChange={e => updateItem(idx, "service", e.target.value)}
+                            className="bg-background"
+                          />
+                          {activeTreatments.length > 0 && (
+                            <button
+                              type="button"
+                              className="text-[10px] text-accent hover:underline"
+                              onClick={() => {
+                                setCustomServiceRows(prev => {
+                                  const next = new Set(prev);
+                                  next.delete(idx);
+                                  return next;
+                                });
+                              }}
+                            >
+                              Elegir del catálogo
+                            </button>
+                          )}
+                        </div>
+                      ) : (
+                        <Select
+                          value={item.service || undefined}
+                          onValueChange={v => selectCatalogTreatment(idx, v)}
+                        >
+                          <SelectTrigger className="bg-background h-10">
+                            <SelectValue placeholder="Seleccionar tratamiento..." />
+                          </SelectTrigger>
+                          <SelectContent className="max-h-[280px]">
+                            {activeTreatments.map(t => (
+                              <SelectItem key={t.id} value={t.name}>
+                                <span className="flex justify-between gap-3 w-full">
+                                  <span>{t.name}</span>
+                                  <span className="text-muted-foreground text-xs">{formatPriceCop(t.price)}</span>
+                                </span>
+                              </SelectItem>
+                            ))}
+                            <SelectItem value="__custom__">— Otro (escribir manualmente) —</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      )}
                     </div>
                     <div className="w-20 space-y-1.5">
                       <Label className="text-[10px] text-muted-foreground ml-1">Cant.</Label>
