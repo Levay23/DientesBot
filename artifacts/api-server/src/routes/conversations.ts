@@ -224,6 +224,7 @@ router.post("/conversations/incoming", async (req, res): Promise<void> => {
       formattedPhone,
       aiResult.actions,
       "incoming",
+      { patientMessage: message },
     );
     conv = { ...conv, ...updatedConv };
   } catch (err) {
@@ -390,6 +391,7 @@ router.post("/conversations/:id/ai-reply", async (req, res): Promise<void> => {
         formattedPhone,
         aiResponse.actions,
         "incoming",
+        { patientMessage: context },
       );
       void updatedConv;
 

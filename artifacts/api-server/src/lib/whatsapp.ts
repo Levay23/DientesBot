@@ -338,6 +338,7 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo): Promise<void> 
           formattedPhone,
           aiResult.actions,
           "whatsapp",
+          { patientMessage: text },
         );
         conv = { ...conv, ...updatedConv };
     } catch (err) {

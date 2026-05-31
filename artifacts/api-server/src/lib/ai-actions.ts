@@ -1,6 +1,7 @@
-import { db, conversationsTable, patientsTable, appointmentsTable, settingsTable } from "@workspace/db";
-import { eq, and, sql } from "drizzle-orm";
+import { db, conversationsTable, patientsTable, appointmentsTable, settingsTable, messagesTable } from "@workspace/db";
+import { eq, and, sql, desc } from "drizzle-orm";
 import type { AIActions } from "./groq";
+import { shouldAllowAIBooking } from "./appointment-confirmation";
 import { logger } from "./logger";
 
 function addMinutes(time: string, minutes: number): string {
@@ -52,9 +53,36 @@ export async function processAIActions(
   formattedPhone: string,
   actions: AIActions,
   source: "whatsapp" | "incoming" = "whatsapp",
+  opts?: { patientMessage?: string },
 ): Promise<ProcessAIActionsResult> {
   let current = { ...conv };
-  const { registerPatient, bookAppointment, updatePhone, updateStatus } = actions;
+  let { registerPatient, bookAppointment, updatePhone, updateStatus } = actions;
+
+  if (bookAppointment?.date && bookAppointment.startTime && opts?.patientMessage) {
+    const recentRows = await db.select().from(messagesTable)
+      .where(eq(messagesTable.conversationId, conv.id))
+      .orderBy(desc(messagesTable.id))
+      .limit(12);
+
+    const history = recentRows.reverse()
+      .filter(m => m.sender === "patient" || m.sender === "ai")
+      .map(m => ({
+        role: m.sender === "patient" ? "user" : "assistant",
+        content: m.content,
+      }));
+
+    const gate = shouldAllowAIBooking(opts.patientMessage, history);
+    if (!gate.allowed) {
+      logger.warn(
+        { conversationId: conv.id, reason: gate.reason, patientMessage: opts.patientMessage, bookAppointment },
+        "bookAppointment bloqueado: paciente no confirmó explícitamente",
+      );
+      bookAppointment = null;
+    }
+  } else if (bookAppointment?.date && !opts?.patientMessage) {
+    logger.warn({ conversationId: conv.id, bookAppointment }, "bookAppointment bloqueado: sin mensaje del paciente");
+    bookAppointment = null;
+  }
 
   if (updateStatus?.status) {
     try {
