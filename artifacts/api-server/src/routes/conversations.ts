@@ -12,6 +12,7 @@ import {
 import { generateAIResponse } from "../lib/groq";
 import { getAvailableSlots } from "../lib/appointment-slots";
 import { processAIActions } from "../lib/ai-actions";
+import { amendAiMessageIfBookingFailed } from "../lib/booking-message";
 import { sendMessageToConversation, getWAState, phoneToJid } from "../lib/whatsapp";
 import { phoneToJidIfValid } from "../lib/jid-utils";
 import {
@@ -194,7 +195,22 @@ router.post("/conversations/incoming", async (req, res): Promise<void> => {
   try {
     const availableSlots = await getAvailableSlots();
     aiResult = await generateAIResponse(conv.id, message, { availableSlots });
-    const aiText = aiResult.message;
+
+    const { conversation: updatedConv, bookingOutcome } = await processAIActions(
+      {
+        id: conv.id,
+        patientId: conv.patientId,
+        patientName: conv.patientName,
+        phone: formattedPhone,
+      },
+      formattedPhone,
+      aiResult.actions,
+      "incoming",
+      { patientMessage: message },
+    );
+    conv = { ...conv, ...updatedConv };
+
+    const aiText = amendAiMessageIfBookingFailed(aiResult.message, bookingOutcome);
 
     if (!aiText) {
       res.status(201).json({ conversation: conv, aiResponse: null });
@@ -213,20 +229,6 @@ router.post("/conversations/incoming", async (req, res): Promise<void> => {
       lastMessage: aiText,
       lastMessageAt: new Date(),
     }).where(eq(conversationsTable.id, conv.id));
-
-    const { conversation: updatedConv } = await processAIActions(
-      {
-        id: conv.id,
-        patientId: conv.patientId,
-        patientName: conv.patientName,
-        phone: formattedPhone,
-      },
-      formattedPhone,
-      aiResult.actions,
-      "incoming",
-      { patientMessage: message },
-    );
-    conv = { ...conv, ...updatedConv };
   } catch (err) {
     logger.error({ err }, "Error generando respuesta IA en incoming");
   }
@@ -365,7 +367,23 @@ router.post("/conversations/:id/ai-reply", async (req, res): Promise<void> => {
 
   try {
     const aiResponse = await generateAIResponse(id, context, { availableSlots });
-    const aiText = aiResponse.message;
+
+    const formattedPhone = conv.phone.startsWith("+") ? conv.phone : `+${conv.phone.replace(/\D/g, "")}`;
+    const { conversation: updatedConv, bookingOutcome } = await processAIActions(
+      {
+        id: conv.id,
+        patientId: conv.patientId,
+        patientName: conv.patientName,
+        phone: formattedPhone,
+      },
+      formattedPhone,
+      aiResponse.actions,
+      "incoming",
+      { patientMessage: context },
+    );
+    void updatedConv;
+
+    const aiText = amendAiMessageIfBookingFailed(aiResponse.message, bookingOutcome);
 
     if (aiText) {
       [aiMsg] = await db.insert(messagesTable).values({
@@ -379,21 +397,6 @@ router.post("/conversations/:id/ai-reply", async (req, res): Promise<void> => {
         lastMessage: aiText,
         lastMessageAt: new Date(),
       }).where(eq(conversationsTable.id, id));
-
-      const formattedPhone = conv.phone.startsWith("+") ? conv.phone : `+${conv.phone.replace(/\D/g, "")}`;
-      const { conversation: updatedConv } = await processAIActions(
-        {
-          id: conv.id,
-          patientId: conv.patientId,
-          patientName: conv.patientName,
-          phone: formattedPhone,
-        },
-        formattedPhone,
-        aiResponse.actions,
-        "incoming",
-        { patientMessage: context },
-      );
-      void updatedConv;
 
       const waState = getWAState();
       if (waState.connected) {

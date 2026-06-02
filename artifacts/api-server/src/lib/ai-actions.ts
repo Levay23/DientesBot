@@ -1,7 +1,13 @@
 import { db, conversationsTable, patientsTable, appointmentsTable, settingsTable, messagesTable } from "@workspace/db";
 import { eq, and, sql, desc, ne } from "drizzle-orm";
 import type { AIActions } from "./groq";
-import { shouldAllowAIBooking, shouldAllowAICancel, shouldAllowAIReschedule } from "./appointment-confirmation";
+import {
+  assistantRecentlyOfferedSlots,
+  shouldAllowAIBooking,
+  shouldAllowAICancel,
+  shouldAllowAIReschedule,
+} from "./appointment-confirmation";
+import type { BookingOutcome } from "./booking-message";
 import { logger } from "./logger";
 
 function addMinutes(time: string, minutes: number): string {
@@ -109,6 +115,7 @@ export interface ConversationRef {
 
 export interface ProcessAIActionsResult {
   conversation: ConversationRef;
+  bookingOutcome?: BookingOutcome | null;
 }
 
 export async function processAIActions(
@@ -120,22 +127,68 @@ export async function processAIActions(
 ): Promise<ProcessAIActionsResult> {
   let current = { ...conv };
   let { registerPatient, bookAppointment, cancelAppointment, rescheduleAppointment, updatePhone, updateStatus } = actions;
+  let bookingOutcome: BookingOutcome | null = null;
 
   const history = opts?.patientMessage
     ? await loadMessageHistory(conv.id)
     : [];
 
-  if (bookAppointment?.date && bookAppointment.startTime && opts?.patientMessage) {
-    const gate = shouldAllowAIBooking(opts.patientMessage, history);
+  // Registrar paciente ANTES del gate de agenda (misma respuesta puede traer register + book)
+  if (registerPatient?.name && !current.patientId) {
+    try {
+      const contactPhone = registerPatient.phone
+        ? (registerPatient.phone.startsWith("+") ? registerPatient.phone : `+${registerPatient.phone.replace(/\D/g, "")}`)
+        : formattedPhone;
+
+      const existingByPhone = await db.select().from(patientsTable).where(eq(patientsTable.phone, contactPhone));
+      let patientId: number;
+
+      if (existingByPhone.length > 0) {
+        patientId = existingByPhone[0].id;
+        await db.update(patientsTable).set({
+          treatment: registerPatient.treatment || existingByPhone[0].treatment,
+        }).where(eq(patientsTable.id, patientId));
+      } else {
+        const [newPatient] = await db.insert(patientsTable).values({
+          name: registerPatient.name,
+          phone: contactPhone,
+          treatment: registerPatient.treatment || "Consulta general",
+          status: "new",
+        }).returning();
+        patientId = newPatient.id;
+      }
+
+      await db.update(conversationsTable).set({
+        patientId,
+        patientName: registerPatient.name,
+      }).where(eq(conversationsTable.id, current.id));
+
+      current = { ...current, patientId, patientName: registerPatient.name };
+      logger.info({ patientId, name: registerPatient.name, phone: contactPhone, source }, "Paciente registrado por IA");
+    } catch (err) {
+      logger.error({ err }, "Error registrando paciente desde IA");
+    }
+  }
+
+  const hadBookIntent = !!(bookAppointment?.date && bookAppointment.startTime);
+  const assistantOfferedSlots = assistantRecentlyOfferedSlots(history);
+
+  if (hadBookIntent && opts?.patientMessage) {
+    const gate = shouldAllowAIBooking(opts.patientMessage, history, {
+      hasBookInResponse: true,
+      assistantOfferedSlots,
+    });
     if (!gate.allowed) {
       logger.warn(
         { conversationId: conv.id, reason: gate.reason, patientMessage: opts.patientMessage, bookAppointment },
         "bookAppointment bloqueado: paciente no confirmó explícitamente",
       );
+      bookingOutcome = { ok: false, reason: "blocked" };
       bookAppointment = null;
     }
-  } else if (bookAppointment?.date && !opts?.patientMessage) {
+  } else if (hadBookIntent && !opts?.patientMessage) {
     logger.warn({ conversationId: conv.id, bookAppointment }, "bookAppointment bloqueado: sin mensaje del paciente");
+    bookingOutcome = { ok: false, reason: "blocked" };
     bookAppointment = null;
   }
 
@@ -176,42 +229,6 @@ export async function processAIActions(
       }
     } catch (err) {
       logger.error({ err }, "Error actualizando estado desde IA");
-    }
-  }
-
-  if (registerPatient?.name && !current.patientId) {
-    try {
-      const contactPhone = registerPatient.phone
-        ? (registerPatient.phone.startsWith("+") ? registerPatient.phone : `+${registerPatient.phone.replace(/\D/g, "")}`)
-        : formattedPhone;
-
-      const existingByPhone = await db.select().from(patientsTable).where(eq(patientsTable.phone, contactPhone));
-      let patientId: number;
-
-      if (existingByPhone.length > 0) {
-        patientId = existingByPhone[0].id;
-        await db.update(patientsTable).set({
-          treatment: registerPatient.treatment || existingByPhone[0].treatment,
-        }).where(eq(patientsTable.id, patientId));
-      } else {
-        const [newPatient] = await db.insert(patientsTable).values({
-          name: registerPatient.name,
-          phone: contactPhone,
-          treatment: registerPatient.treatment || "Consulta general",
-          status: "new",
-        }).returning();
-        patientId = newPatient.id;
-      }
-
-      await db.update(conversationsTable).set({
-        patientId,
-        patientName: registerPatient.name,
-      }).where(eq(conversationsTable.id, current.id));
-
-      current = { ...current, patientId, patientName: registerPatient.name };
-      logger.info({ patientId, name: registerPatient.name, phone: contactPhone, source }, "Paciente registrado por IA");
-    } catch (err) {
-      logger.error({ err }, "Error registrando paciente desde IA");
     }
   }
 
@@ -337,8 +354,8 @@ export async function processAIActions(
       const startTime = normalizeStartTime(bookAppointment.startTime);
       if (!startTime) {
         logger.warn({ raw: bookAppointment.startTime }, "Cita rechazada: hora inválida");
-        return { conversation: current };
-      }
+        bookingOutcome = { ok: false, reason: "invalid_time" };
+      } else {
 
       let patientId = current.patientId;
       if (!patientId) {
@@ -353,7 +370,7 @@ export async function processAIActions(
           patientId = existingByPhone.id;
           await db.update(conversationsTable).set({ patientId }).where(eq(conversationsTable.id, current.id));
           current = { ...current, patientId };
-        } else {
+        } else if (cleanName.length >= 2 && !/^\d+$/.test(cleanName)) {
           const [newPatient] = await db.insert(patientsTable).values({
             name: cleanName,
             phone: formattedPhone,
@@ -413,24 +430,32 @@ export async function processAIActions(
 
             await tx.update(patientsTable).set({ status: "scheduled" }).where(eq(patientsTable.id, patientId));
             logger.info({ appt, source }, "Cita registrada por IA");
+            bookingOutcome = { ok: true, appointmentId: appt.id };
           });
         } catch (txErr: unknown) {
           const msg = txErr instanceof Error ? txErr.message : "";
           if (msg === "slot_conflict") {
             logger.warn({ bookAppointment }, "Cita rechazada: franja horaria ya ocupada");
+            bookingOutcome = { ok: false, reason: "slot_conflict" };
           } else if (msg === "patient_conflict") {
             logger.warn({ patientId, date: bookAppointment.date }, "Cita rechazada: paciente ya tiene cita ese día");
+            bookingOutcome = { ok: false, reason: "patient_conflict" };
           } else {
             throw txErr;
           }
         }
       } else {
         logger.warn({ bookAppointment }, "No se pudo registrar cita: paciente no encontrado");
+        bookingOutcome = { ok: false, reason: "no_patient" };
+      }
       }
     } catch (err) {
       logger.error({ err }, "Error registrando cita desde IA");
+      if (hadBookIntent && !bookingOutcome) {
+        bookingOutcome = { ok: false, reason: "blocked" };
+      }
     }
   }
 
-  return { conversation: current };
+  return { conversation: current, bookingOutcome };
 }

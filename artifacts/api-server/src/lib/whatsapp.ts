@@ -15,6 +15,7 @@ import { logger } from "./logger";
 import { usePostgresAuthState } from "./postgres-auth-state";
 import { getAvailableSlots } from "./appointment-slots";
 import { processAIActions } from "./ai-actions";
+import { amendAiMessageIfBookingFailed } from "./booking-message";
 import { parseIncomingContact, resolveOutboundJid, phoneToJidIfValid } from "./jid-utils";
 import { resolveConversationIdentity, formatColombianPhone, isValidColombianPhone } from "./conversation-patient-sync";
 
@@ -288,7 +289,22 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo): Promise<void> 
       try {
         const availableSlots = await getAvailableSlots();
         const aiResult = await generateAIResponse(conv.id, text, { availableSlots });
-        const aiText = aiResult.message;
+
+        const { conversation: updatedConv, bookingOutcome } = await processAIActions(
+          {
+            id: conv.id,
+            patientId: conv.patientId,
+            patientName: conv.patientName,
+            phone: formattedPhone,
+          },
+          formattedPhone,
+          aiResult.actions,
+          "whatsapp",
+          { patientMessage: text },
+        );
+        conv = { ...conv, ...updatedConv };
+
+        const aiText = amendAiMessageIfBookingFailed(aiResult.message, bookingOutcome);
 
         if (aiText) {
           await db.insert(messagesTable).values({
@@ -327,20 +343,6 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo): Promise<void> 
       logger.error({ jid: outboundJid, status: _state.status }, "CRÍTICO: No se pudo enviar mensaje (sock o JID inválido)");
     }
         }
-        
-        const { conversation: updatedConv } = await processAIActions(
-          {
-            id: conv.id,
-            patientId: conv.patientId,
-            patientName: conv.patientName,
-            phone: formattedPhone,
-          },
-          formattedPhone,
-          aiResult.actions,
-          "whatsapp",
-          { patientMessage: text },
-        );
-        conv = { ...conv, ...updatedConv };
     } catch (err) {
       logger.error({ err }, "Error procesando respuesta IA");
     }

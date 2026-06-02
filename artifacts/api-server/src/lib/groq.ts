@@ -271,6 +271,8 @@ REGLA DE AGENDA:
 - Usa bookAppointment solo para cita NUEVA cuando el paciente confirme fecha y hora.
 - NO uses bookAppointment si el paciente ya tiene cita y quiere cambiarla; usa rescheduleAppointment.
 - Flujo nueva cita: ofreces horarios → paciente confirma → bookAppointment.
+- PROHIBIDO decir "te he agendado" o "cita confirmada" si no incluyes bookAppointment (o rescheduleAppointment) en actions con fecha y hora correctas.
+- Si aún no tienes el nombre del paciente, usa registerPatient y bookAppointment en el mismo JSON cuando ya confirmó horario.
 
 CANCELAR CITA:
 - Si pide cancelar/anular/no puede asistir, identifica la cita en PRÓXIMAS (appointmentId).
