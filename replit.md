@@ -15,7 +15,7 @@ Sistema CRM para clínica dental. Permite gestionar pacientes, citas, mensajes d
 ## Default Credentials
 
 - **Email:** admin@dientesfijosmedellin.com
-- **Password:** Admin2024!
+- **Password:** Dientes123
 
 ## Stack
 

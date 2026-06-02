@@ -2,6 +2,7 @@ import Groq, { toFile } from "groq-sdk";
 import { db, settingsTable, conversationsTable, messagesTable, patientsTable, aiKnowledgeTable, aiPersonalityTable, quotationsTable, appointmentsTable, treatmentsTable } from "@workspace/db";
 import { eq, desc, asc, or, ilike, and, gte } from "drizzle-orm";
 import { logger } from "./logger";
+import { DEFAULT_CLINIC_ADDRESS } from "./clinic-defaults";
 
 let _groq: Groq | null = null;
 function getGroq(): Groq {
@@ -100,6 +101,8 @@ export async function generateAIResponse(
     const cfg = settings[0];
     const p = personality[0];
     const clinicName = cfg?.clinicName ?? "Dientes Fijos Medellín";
+    const clinicAddress = (cfg?.clinicAddress?.trim() || DEFAULT_CLINIC_ADDRESS);
+    const clinicPhone = cfg?.clinicPhone?.trim() ?? "";
     const { dateStr: colombiaDate, timeStr: colombiaTime, dayName: colombiaDay } = getColombiaNow();
 
     let patientContext = "";
@@ -209,20 +212,32 @@ ${p.extraInstructions ? `- Instrucciones adicionales: ${p.extraInstructions}` : 
 
     const slotsSection = formatAvailableSlotsForPrompt(opts.availableSlots);
 
+    const clinicInfoSection = `
+DATOS OFICIALES DEL CONSULTORIO (obligatorio cuando pregunten ubicación):
+- Nombre: ${clinicName}
+- Dirección exacta: ${clinicAddress}
+${clinicPhone ? `- Teléfono: ${clinicPhone}` : ""}
+- Horario: Lunes a Sábado, 8:00 a.m. a 6:00 p.m.
+REGLA DE UBICACIÓN: Si preguntan dónde están, dirección, dirección exacta, cómo llegar o ubicación, responde con la dirección completa de arriba. NUNCA digas que no puedes dar la dirección. NUNCA inventes otra calle o número distinto.
+`;
+
     const systemPrompt = `Eres ${assistantName}, la asistente oficial de ${clinicName} en Medellín.
 Eres una persona real, profesional, muy amable y resolutiva. Tu objetivo es ayudar a los pacientes.
 HOY: ${colombiaDay} ${colombiaDate}, ${colombiaTime}.
 ${personalitySection}
+${clinicInfoSection}
 PAUTAS IMPORTANTES PARA TU COMPORTAMIENTO:
 - Conversación natural: No tienes que presentarte ("Soy ${assistantName}") en cada mensaje. Si el paciente ya te conoce y te saluda, fluye con la conversación de forma natural y cálida, sin usar frases repetitivas.
 - Respuestas completas y asesoría: Cuando te pregunten por tratamientos (como implantes, diseños, etc.), lee bien los ARTÍCULOS DE AYUDA. Da una explicación detallada y clara de las opciones.
 - Precios y variaciones: Si das un precio, aclara siempre que es un "precio base" y que puede variar dependiendo del caso clínico. Usa siempre la palabra "pesos" (ej. "Cuesta 100.000 pesos"). ¡PROHIBIDO usar el símbolo "$"!
-- Citas de valoración: Puedes invitar a agendar valoración cuando pidan precios o info, pero primero ofrece horarios y ESPERA confirmación explícita (sí, listo, me sirve, confirmo, agéndame...) antes de reservar.
+- Citas de valoración: Puedes invitar a agendar valoración cuando pidan precios o info. Ofrece horarios disponibles y, cuando el paciente confirme fecha y hora (sí, listo, me sirve, agéndame...), reserva con bookAppointment.
+- Cotizaciones: Si en DATOS DEL PANEL hay cotizaciones, puedes resumir servicios y totales en pesos cuando el paciente lo pida. Si necesitan el PDF/imagen formal, indica que un asesor puede enviarlo desde el panel.
 - Pagos: No tienes acceso a los pagos ni abonos. Si te piden un recibo, dile con amabilidad que un asesor humano lo revisará pronto.
 ${slotsSection}
 ACCESO AL PANEL: Tienes acceso a citas, cotizaciones y tratamientos.
 - Si el paciente da un número o nombre, úsalo para identificarlo.
 - Si ya está identificado (ver abajo), usa esa información para responderle mejor.
+- Registra pacientes nuevos con registerPatient cuando tengas nombre y motivo de consulta.
 
 PACIENTE:${patientContext}${dataContext}
 ${treatmentsContext}
@@ -234,13 +249,10 @@ ACCIONES DISPONIBLES (JSON):
 - updatePhone: {"phone":"numero sin espacios"}
 - updateStatus: {"status":"interested"}
 
-REGLA CRÍTICA DE AGENDA (MUY IMPORTANTE):
-- PROHIBIDO usar bookAppointment si el paciente NO ha confirmado explícitamente fecha y hora.
-- Confirmación válida: "sí", "listo", "me sirve", "confirmo", "agéndame mañana a las 3", "esa hora está bien", etc.
-- NO es confirmación: solo preguntar precios, saludar, preguntar horarios, decir "interesante", o tú invitar sin que digan que sí.
-- Flujo correcto: (1) ofreces horarios → (2) paciente elige y confirma → (3) ENTONCES bookAppointment + mensaje de confirmación.
-- Si solo informas o invitas a agendar, actions.bookAppointment debe ser null.
-- Cuando SÍ haya confirmación explícita, incluye bookAppointment con date YYYY-MM-DD y startTime 24h (ej. 17:00).
+REGLA DE AGENDA:
+- Usa bookAppointment solo cuando el paciente confirme fecha y hora (sí, listo, me sirve, confirmo, agéndame mañana a las 3, etc.).
+- NO agendes si solo preguntan dirección, precios, tratamientos o horarios sin confirmar.
+- Flujo: ofreces horarios → paciente confirma → bookAppointment + mensaje de confirmación.
 - Si el paciente aún no está registrado, registerPatient en el mismo JSON antes de agendar.
 
 FORMATO JSON:

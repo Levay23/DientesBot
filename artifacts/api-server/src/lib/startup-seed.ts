@@ -1,18 +1,14 @@
-import { db, usersTable, aiKnowledgeTable, aiPersonalityTable, appointmentsTable, patientsTable } from "@workspace/db";
-import { eq, sql } from "drizzle-orm";
+import { db, usersTable, aiKnowledgeTable, aiPersonalityTable, appointmentsTable, patientsTable, settingsTable } from "@workspace/db";
+import { eq, sql, ilike, or } from "drizzle-orm";
 import { logger } from "./logger";
 import { ensureTreatmentsCatalog } from "./treatments-catalog";
+import { DEFAULT_CLINIC_ADDRESS, buildGeneralKnowledgeContent } from "./clinic-defaults";
 
 const KNOWLEDGE = [
   {
     title: "Informacion general del consultorio",
     category: "general",
-    content: `Clinica: Dientes Fijos Medellin
-Especialidad: Odontologia estetica, rehabilitacion oral e implantes
-Horario: Lunes a Sabado de 8:00 a.m. a 6:00 p.m.
-Ubicacion: Medellin, Colombia
-Politica de citas: Puntualidad requerida. Cancelaciones con minimo 24 horas de anticipacion.
-Formas de pago: Efectivo, transferencia bancaria, tarjetas debito y credito. Planes de pago disponibles.`,
+    content: buildGeneralKnowledgeContent(),
   },
   {
     title: "Pagos y politica de citas",
@@ -158,8 +154,55 @@ const PERSONALITY = {
   suggestAppointments: true,
   maxResponseLength: "corta",
   escalateKeywords: "emergencia,urgencia,dolor fuerte,accidente,hemorragia,sangrado",
-  extraInstructions: "Nunca admitas ser un bot o IA. Eres Andrea, parte del equipo humano de Dientes Fijos Medellin. Usa voseo y calidez paisa. Siempre menciona el consultorio en el primer mensaje.",
+  extraInstructions:
+    "Nunca admitas ser un bot o IA. Eres Andrea, parte del equipo de Dientes Fijos Medellín. Usa voseo y calidez paisa. Si preguntan dirección o ubicación, da siempre la dirección exacta del consultorio (Calle 514 # 43-05, centro de Medellín). Sé atenta, resuelve dudas, invita a valoración cuando tenga sentido y usa cotizaciones del panel si el paciente ya tiene presupuesto.",
 };
+
+async function ensureClinicAddressInDatabase(): Promise<void> {
+  const generalContent = buildGeneralKnowledgeContent();
+
+  const [settings] = await db.select().from(settingsTable).limit(1);
+  if (settings) {
+    const addr = settings.clinicAddress?.trim() ?? "";
+    if (!addr || !/514/.test(addr)) {
+      await db
+        .update(settingsTable)
+        .set({ clinicAddress: DEFAULT_CLINIC_ADDRESS })
+        .where(eq(settingsTable.id, settings.id));
+      logger.info("Dirección del consultorio actualizada en settings");
+    }
+  }
+
+  const [generalEntry] = await db
+    .select()
+    .from(aiKnowledgeTable)
+    .where(
+      or(
+        ilike(aiKnowledgeTable.title, "%informacion general%"),
+        ilike(aiKnowledgeTable.title, "%información general%"),
+      ),
+    )
+    .limit(1);
+
+  if (generalEntry) {
+    if (!generalEntry.content.includes("514")) {
+      await db
+        .update(aiKnowledgeTable)
+        .set({ content: generalContent, updatedAt: new Date() })
+        .where(eq(aiKnowledgeTable.id, generalEntry.id));
+      logger.info("Artículo de conocimiento general actualizado con dirección exacta");
+    }
+  }
+
+  const [personality] = await db.select().from(aiPersonalityTable).limit(1);
+  if (personality && !personality.extraInstructions?.includes("514")) {
+    await db
+      .update(aiPersonalityTable)
+      .set({ extraInstructions: PERSONALITY.extraInstructions, updatedAt: new Date() })
+      .where(eq(aiPersonalityTable.id, personality.id));
+    logger.info("Instrucciones de Andrea actualizadas (dirección y atención al paciente)");
+  }
+}
 
 export async function runStartupSeed(): Promise<void> {
   logger.info("Ejecutando startup seed...");
@@ -195,12 +238,10 @@ export async function runStartupSeed(): Promise<void> {
       await db.insert(aiPersonalityTable).values(PERSONALITY);
       logger.info("AI personality created");
     } else {
-      // Update personality fields on every startup to pick up changes
-      await db.update(aiPersonalityTable)
-        .set({ ...PERSONALITY, updatedAt: new Date() })
-        .where(eq(aiPersonalityTable.id, existingP.id));
-      logger.info("AI personality updated");
+      logger.info("AI personality already present (no se sobrescribe desde seed)");
     }
+
+    await ensureClinicAddressInDatabase();
 
     // ── Sincronizar estados de pacientes con sus citas ───────────────────────
     // Regla: citas pasadas no canceladas → completed; paciente con citas futuras → scheduled; resto → attended

@@ -25,6 +25,7 @@ const DAYS = [
 type SettingsForm = {
   clinicName: string;
   clinicPhone: string;
+  clinicAddress: string;
   workingHoursStart: string;
   workingHoursEnd: string;
   workingDays: string[];
@@ -41,7 +42,7 @@ export default function Settings() {
   const updateSettings = useUpdateSettings();
 
   const [form, setForm] = useState<SettingsForm>({
-    clinicName: "", clinicPhone: "", workingHoursStart: "08:00", workingHoursEnd: "18:00",
+    clinicName: "", clinicPhone: "", clinicAddress: "", workingHoursStart: "08:00", workingHoursEnd: "18:00",
     workingDays: ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday"],
     defaultAppointmentDuration: "60", aiGreetingMessage: "", aiSignature: "", autoConfirmAppointments: false,
   });
@@ -51,6 +52,7 @@ export default function Settings() {
       setForm({
         clinicName: settings.clinicName ?? "",
         clinicPhone: settings.clinicPhone ?? "",
+        clinicAddress: settings.clinicAddress ?? "",
         workingHoursStart: settings.workingHoursStart ?? "08:00",
         workingHoursEnd: settings.workingHoursEnd ?? "18:00",
         workingDays: settings.workingDays ?? [],
@@ -74,6 +76,7 @@ export default function Settings() {
       data: {
         clinicName: form.clinicName,
         clinicPhone: form.clinicPhone || undefined,
+        clinicAddress: form.clinicAddress || undefined,
         workingHoursStart: form.workingHoursStart,
         workingHoursEnd: form.workingHoursEnd,
         workingDays: form.workingDays,
@@ -126,6 +129,15 @@ export default function Settings() {
                     <Label>Teléfono de contacto</Label>
                     <Input value={form.clinicPhone} onChange={e => setForm(f => ({ ...f, clinicPhone: e.target.value }))} className="bg-background" placeholder="+57 604 000 0000" />
                   </div>
+                </div>
+                <div className="space-y-1">
+                  <Label>Dirección del consultorio (la usa Andrea en WhatsApp)</Label>
+                  <Input
+                    value={form.clinicAddress}
+                    onChange={e => setForm(f => ({ ...f, clinicAddress: e.target.value }))}
+                    className="bg-background"
+                    placeholder="Calle 514 # 43-05, Centro de Medellín"
+                  />
                 </div>
               </CardContent>
             </Card>
