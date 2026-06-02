@@ -1,7 +1,7 @@
 import { db, conversationsTable, patientsTable, appointmentsTable, settingsTable, messagesTable } from "@workspace/db";
-import { eq, and, sql, desc } from "drizzle-orm";
+import { eq, and, sql, desc, ne } from "drizzle-orm";
 import type { AIActions } from "./groq";
-import { shouldAllowAIBooking } from "./appointment-confirmation";
+import { shouldAllowAIBooking, shouldAllowAICancel, shouldAllowAIReschedule } from "./appointment-confirmation";
 import { logger } from "./logger";
 
 function addMinutes(time: string, minutes: number): string {
@@ -37,6 +37,69 @@ function normalizeStartTime(raw: string): string | null {
   return null;
 }
 
+function colombiaToday(): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Bogota",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+}
+
+async function syncPatientStatusAfterChange(patientId: number): Promise<void> {
+  const today = colombiaToday();
+  await db
+    .update(appointmentsTable)
+    .set({ status: "completed" })
+    .where(
+      and(
+        eq(appointmentsTable.patientId, patientId),
+        sql`${appointmentsTable.date} < ${today}`,
+        sql`${appointmentsTable.status} IN ('scheduled', 'confirmed')`,
+      ),
+    );
+
+  const allAppts = await db
+    .select({ status: appointmentsTable.status, date: appointmentsTable.date })
+    .from(appointmentsTable)
+    .where(eq(appointmentsTable.patientId, patientId));
+
+  const hasFutureActive = allAppts.some(
+    (a) => (a.status === "scheduled" || a.status === "confirmed") && a.date >= today,
+  );
+  const hasAttended = allAppts.some((a) => a.status === "completed" || a.status === "no_show");
+
+  let newStatus: string | null = null;
+  if (hasFutureActive) newStatus = "scheduled";
+  else if (hasAttended) newStatus = "attended";
+
+  if (newStatus) {
+    await db.update(patientsTable).set({ status: newStatus }).where(eq(patientsTable.id, patientId));
+  }
+}
+
+async function resolvePatientId(
+  current: ConversationRef,
+  formattedPhone: string,
+): Promise<number | null> {
+  if (current.patientId) return current.patientId;
+  const [byPhone] = await db.select().from(patientsTable).where(eq(patientsTable.phone, formattedPhone));
+  return byPhone?.id ?? null;
+}
+
+async function loadMessageHistory(conversationId: number) {
+  const recentRows = await db.select().from(messagesTable)
+    .where(eq(messagesTable.conversationId, conversationId))
+    .orderBy(desc(messagesTable.id))
+    .limit(12);
+  return recentRows.reverse()
+    .filter(m => m.sender === "patient" || m.sender === "ai")
+    .map(m => ({
+      role: m.sender === "patient" ? "user" : "assistant",
+      content: m.content,
+    }));
+}
+
 export interface ConversationRef {
   id: number;
   patientId: number | null;
@@ -56,21 +119,13 @@ export async function processAIActions(
   opts?: { patientMessage?: string },
 ): Promise<ProcessAIActionsResult> {
   let current = { ...conv };
-  let { registerPatient, bookAppointment, updatePhone, updateStatus } = actions;
+  let { registerPatient, bookAppointment, cancelAppointment, rescheduleAppointment, updatePhone, updateStatus } = actions;
+
+  const history = opts?.patientMessage
+    ? await loadMessageHistory(conv.id)
+    : [];
 
   if (bookAppointment?.date && bookAppointment.startTime && opts?.patientMessage) {
-    const recentRows = await db.select().from(messagesTable)
-      .where(eq(messagesTable.conversationId, conv.id))
-      .orderBy(desc(messagesTable.id))
-      .limit(12);
-
-    const history = recentRows.reverse()
-      .filter(m => m.sender === "patient" || m.sender === "ai")
-      .map(m => ({
-        role: m.sender === "patient" ? "user" : "assistant",
-        content: m.content,
-      }));
-
     const gate = shouldAllowAIBooking(opts.patientMessage, history);
     if (!gate.allowed) {
       logger.warn(
@@ -82,6 +137,30 @@ export async function processAIActions(
   } else if (bookAppointment?.date && !opts?.patientMessage) {
     logger.warn({ conversationId: conv.id, bookAppointment }, "bookAppointment bloqueado: sin mensaje del paciente");
     bookAppointment = null;
+  }
+
+  if (cancelAppointment?.appointmentId && opts?.patientMessage) {
+    if (!shouldAllowAICancel(opts.patientMessage, history)) {
+      logger.warn(
+        { conversationId: conv.id, cancelAppointment, patientMessage: opts.patientMessage },
+        "cancelAppointment bloqueado: sin intención explícita de cancelar",
+      );
+      cancelAppointment = null;
+    }
+  } else if (cancelAppointment?.appointmentId) {
+    cancelAppointment = null;
+  }
+
+  if (rescheduleAppointment?.appointmentId && rescheduleAppointment.date && rescheduleAppointment.startTime && opts?.patientMessage) {
+    if (!shouldAllowAIReschedule(opts.patientMessage, history)) {
+      logger.warn(
+        { conversationId: conv.id, rescheduleAppointment, patientMessage: opts.patientMessage },
+        "rescheduleAppointment bloqueado: sin confirmación de nueva fecha/hora",
+      );
+      rescheduleAppointment = null;
+    }
+  } else if (rescheduleAppointment?.appointmentId) {
+    rescheduleAppointment = null;
   }
 
   if (updateStatus?.status) {
@@ -155,6 +234,101 @@ export async function processAIActions(
       }
     } catch (err) {
       logger.error({ err }, "Error actualizando teléfono del paciente");
+    }
+  }
+
+  if (cancelAppointment?.appointmentId) {
+    try {
+      const patientId = await resolvePatientId(current, formattedPhone);
+      if (!patientId) {
+        logger.warn({ cancelAppointment }, "Cancelación rechazada: paciente no identificado");
+      } else {
+        const [appt] = await db.select().from(appointmentsTable)
+          .where(eq(appointmentsTable.id, cancelAppointment.appointmentId))
+          .limit(1);
+
+        if (!appt || appt.patientId !== patientId) {
+          logger.warn({ cancelAppointment, patientId }, "Cancelación rechazada: cita no pertenece al paciente");
+        } else if (appt.status === "cancelled") {
+          logger.warn({ appointmentId: appt.id }, "Cancelación ignorada: cita ya cancelada");
+        } else if (appt.status !== "scheduled" && appt.status !== "confirmed") {
+          logger.warn({ appointmentId: appt.id, status: appt.status }, "Cancelación rechazada: cita no activa");
+        } else {
+          const noteSuffix = " | Cancelada por WhatsApp Bot";
+          await db.update(appointmentsTable).set({
+            status: "cancelled",
+            notes: appt.notes ? `${appt.notes}${noteSuffix}` : noteSuffix.trim(),
+          }).where(eq(appointmentsTable.id, appt.id));
+          await syncPatientStatusAfterChange(patientId);
+          logger.info({ appointmentId: appt.id, patientId, source }, "Cita cancelada por IA");
+        }
+      }
+    } catch (err) {
+      logger.error({ err }, "Error cancelando cita desde IA");
+    }
+  }
+
+  if (rescheduleAppointment?.appointmentId && rescheduleAppointment.date && rescheduleAppointment.startTime) {
+    try {
+      const startTime = normalizeStartTime(rescheduleAppointment.startTime);
+      if (!startTime) {
+        logger.warn({ raw: rescheduleAppointment.startTime }, "Reagendamiento rechazado: hora inválida");
+      } else {
+      const patientId = await resolvePatientId(current, formattedPhone);
+      if (!patientId) {
+        logger.warn({ rescheduleAppointment }, "Reagendamiento rechazado: paciente no identificado");
+      } else {
+
+      const [appt] = await db.select().from(appointmentsTable)
+        .where(eq(appointmentsTable.id, rescheduleAppointment.appointmentId))
+        .limit(1);
+
+      if (!appt || appt.patientId !== patientId) {
+        logger.warn({ rescheduleAppointment, patientId }, "Reagendamiento rechazado: cita no pertenece al paciente");
+      } else if (appt.status !== "scheduled" && appt.status !== "confirmed") {
+        logger.warn({ appointmentId: appt.id, status: appt.status }, "Reagendamiento rechazado: cita no activa");
+      } else {
+
+      const [settings] = await db.select().from(settingsTable).limit(1);
+      const duration = settings?.defaultAppointmentDuration ?? 60;
+      const endTime = addMinutes(startTime, duration);
+      const newDate = rescheduleAppointment.date;
+
+      await db.transaction(async (tx) => {
+        const slotConflicts = await tx.select().from(appointmentsTable)
+          .where(and(
+            eq(appointmentsTable.date, newDate),
+            sql`${appointmentsTable.status} != 'cancelled'`,
+            ne(appointmentsTable.id, appt.id),
+          ));
+        const hasSlotConflict = slotConflicts.some(
+          (a) => !(a.endTime <= startTime || a.startTime >= endTime),
+        );
+        if (hasSlotConflict) throw new Error("slot_conflict");
+
+        const noteSuffix = " | Reagendada por WhatsApp Bot";
+        await tx.update(appointmentsTable).set({
+          date: newDate,
+          startTime,
+          endTime,
+          status: "scheduled",
+          notes: appt.notes ? `${appt.notes}${noteSuffix}` : noteSuffix.trim(),
+        }).where(eq(appointmentsTable.id, appt.id));
+
+        await tx.update(patientsTable).set({ status: "scheduled" }).where(eq(patientsTable.id, patientId));
+      });
+
+      logger.info({ appointmentId: appt.id, newDate, startTime, source }, "Cita reagendada por IA");
+      }
+      }
+      }
+    } catch (txErr: unknown) {
+      const msg = txErr instanceof Error ? txErr.message : "";
+      if (msg === "slot_conflict") {
+        logger.warn({ rescheduleAppointment }, "Reagendamiento rechazado: cupo no disponible");
+      } else {
+        logger.error({ err: txErr }, "Error reagendando cita desde IA");
+      }
     }
   }
 

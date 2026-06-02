@@ -36,6 +36,11 @@ export function shouldAllowAIBooking(
     return { allowed: false, reason: "mensaje_vacio" };
   }
 
+  const RESCHEDULE_WITH_TIME = /\b(reagendar|reagenda|cambiar\s+(la\s+)?cita|mover\s+(la\s+)?cita|reprogramar|aplazar|postergar)\b/i;
+  if (RESCHEDULE_WITH_TIME.test(lower) && TIME_HINT.test(lower)) {
+    return { allowed: true, reason: "reagendar_con_horario" };
+  }
+
   // Solicitud explícita de cita (idealmente con fecha/hora)
   if (EXPLICIT_BOOKING.test(lower)) {
     if (TIME_HINT.test(lower) || CONFIRMATION_PHRASES.test(lower)) {
@@ -66,4 +71,37 @@ export function shouldAllowAIBooking(
   }
 
   return { allowed: false, reason: "sin_confirmacion_explicita" };
+}
+
+const CANCEL_INTENT = /\b(cancelar|cancela|anular|anula|eliminar|no\s+puedo\s+(ir|asistir|llegar)|no\s+voy\s+a\s+poder|suspender\s+(la\s+)?cita|borrar\s+(la\s+)?cita)\b/i;
+
+const RESCHEDULE_INTENT = /\b(reagendar|reagenda|cambiar\s+(la\s+)?cita|mover\s+(la\s+)?cita|otra\s+fecha|otro\s+d[ií]a|postergar|aplazar|reprogramar)\b/i;
+
+export function shouldAllowAICancel(
+  patientMessage: string,
+  recentHistory: { role: string; content: string }[] = [],
+): boolean {
+  const msg = patientMessage.trim();
+  const lower = msg.toLowerCase();
+  if (CANCEL_INTENT.test(lower)) return true;
+
+  const assistantRecent = lastAssistantMessages(recentHistory, 2).join(" ").toLowerCase();
+  if (/cancelar|anular|confirmas.*cancel/i.test(assistantRecent) && CONFIRMATION_ONLY.test(msg)) {
+    return true;
+  }
+  return false;
+}
+
+export function shouldAllowAIReschedule(
+  patientMessage: string,
+  recentHistory: { role: string; content: string }[] = [],
+): boolean {
+  const lower = patientMessage.trim().toLowerCase();
+  const assistantRecent = lastAssistantMessages(recentHistory, 3).join(" ").toLowerCase();
+  const inRescheduleFlow =
+    RESCHEDULE_INTENT.test(lower) ||
+    /reagend|cambiar tu cita|nueva fecha|otro horario|mover tu cita|reprogramar/i.test(assistantRecent);
+
+  if (!inRescheduleFlow) return false;
+  return shouldAllowAIBooking(patientMessage, recentHistory).allowed;
 }

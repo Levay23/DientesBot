@@ -15,6 +15,8 @@ function getGroq(): Groq {
 export interface AIActions {
   registerPatient?: { name: string; phone?: string | null; treatment: string } | null;
   bookAppointment?: { date: string; startTime: string; treatment: string; notes?: string } | null;
+  cancelAppointment?: { appointmentId: number } | null;
+  rescheduleAppointment?: { appointmentId: number; date: string; startTime: string } | null;
   updatePhone?: { phone: string } | null;
   updateStatus?: { status: "new" | "interested" | "scheduled" | "attended" | "in_treatment" | "completed" } | null;
 }
@@ -77,9 +79,9 @@ HORARIOS DISPONIBLES: No hay cupos libres en los próximos 3 días laborables. O
     (d) => `- ${d.label}: ${d.slots.map((t) => to12h(t)).join(", ")} (reservar con startTime 24h: ${d.slots.join(", ")})`,
   );
   return `
-HORARIOS DISPONIBLES (solo para INFORMAR al paciente; NO agendar hasta que confirme):
-- Puedes ofrecer estos cupos cuando el paciente quiera agendar.
-- Usa la fecha YYYY-MM-DD entre paréntesis y startTime 24h HH:MM solo si el paciente CONFIRMA explícitamente.
+HORARIOS DISPONIBLES (para agendar cita nueva o reagendar; NO ejecutar hasta que el paciente confirme):
+- Puedes ofrecer estos cupos cuando el paciente quiera agendar o cambiar una cita.
+- Usa la fecha YYYY-MM-DD y startTime 24h HH:MM solo si el paciente CONFIRMA explícitamente.
 - No inventes horarios fuera de esta lista.
 ${lines.join("\n")}
 `;
@@ -134,6 +136,10 @@ export async function generateAIResponse(
           patientContext = `\nPACIENTE ENCONTRADO:\n- Nombre: ${pData.name} (llámalo/a "${firstName}")\n- Teléfono: ${pData.phone}\n- Estado: ${pData.status}`;
           
           dataContext += "\n━━━ DATOS DEL PANEL ━━━";
+
+          const upcomingAppts = appointments
+            .filter((a) => (a.status === "scheduled" || a.status === "confirmed") && a.date >= colombiaDate)
+            .sort((a, b) => a.date.localeCompare(b.date) || a.startTime.localeCompare(b.startTime));
           
           if (quotes.length > 0) {
             dataContext += "\nCOTIZACIONES:";
@@ -144,9 +150,19 @@ export async function generateAIResponse(
           }
 
           if (appointments.length > 0) {
-            dataContext += "\nCITAS RECIENTES:";
-            for (const a of appointments) {
-              dataContext += `\n- ${a.date} ${to12h(a.startTime)}: ${a.treatment} (${a.status})`;
+            dataContext += "\nCITAS DEL PACIENTE (usa appointmentId para cancelar o reagendar):";
+            if (upcomingAppts.length > 0) {
+              dataContext += "\nPRÓXIMAS (activas):";
+              for (const a of upcomingAppts) {
+                dataContext += `\n- appointmentId ${a.id} | ${a.date} ${to12h(a.startTime)} | ${a.treatment} (${a.status})`;
+              }
+            }
+            const pastOrOther = appointments.filter((a) => !upcomingAppts.some((u) => u.id === a.id));
+            if (pastOrOther.length > 0) {
+              dataContext += "\nHISTORIAL RECIENTE:";
+              for (const a of pastOrOther.slice(0, 3)) {
+                dataContext += `\n- appointmentId ${a.id} | ${a.date} ${to12h(a.startTime)} | ${a.treatment} (${a.status})`;
+              }
             }
           }
         }
@@ -246,14 +262,28 @@ ${knowledgeSection}
 ACCIONES DISPONIBLES (JSON):
 - registerPatient: {"name":"Nombre","phone":null,"treatment":"motivo"}
 - bookAppointment: {"date":"YYYY-MM-DD","startTime":"HH:MM","treatment":"motivo","notes":"nota"}
+- cancelAppointment: {"appointmentId":123}
+- rescheduleAppointment: {"appointmentId":123,"date":"YYYY-MM-DD","startTime":"HH:MM"}
 - updatePhone: {"phone":"numero sin espacios"}
 - updateStatus: {"status":"interested"}
 
 REGLA DE AGENDA:
-- Usa bookAppointment solo cuando el paciente confirme fecha y hora (sí, listo, me sirve, confirmo, agéndame mañana a las 3, etc.).
-- NO agendes si solo preguntan dirección, precios, tratamientos o horarios sin confirmar.
-- Flujo: ofreces horarios → paciente confirma → bookAppointment + mensaje de confirmación.
-- Si el paciente aún no está registrado, registerPatient en el mismo JSON antes de agendar.
+- Usa bookAppointment solo para cita NUEVA cuando el paciente confirme fecha y hora.
+- NO uses bookAppointment si el paciente ya tiene cita y quiere cambiarla; usa rescheduleAppointment.
+- Flujo nueva cita: ofreces horarios → paciente confirma → bookAppointment.
+
+CANCELAR CITA:
+- Si pide cancelar/anular/no puede asistir, identifica la cita en PRÓXIMAS (appointmentId).
+- Si tiene una sola cita próxima, confirma amablemente y usa cancelAppointment con ese appointmentId.
+- Si tiene varias, pregunta cuál cancelar antes de ejecutar la acción.
+- Solo cancelAppointment cuando el paciente confirme que desea cancelar (sí, cancela, listo, confirmo cancelación).
+
+REAGENDAR CITA:
+- Si pide cambiar fecha/hora/reagendar, identifica appointmentId de PRÓXIMAS.
+- Ofrece horarios de HORARIOS DISPONIBLES; cuando confirme la nueva fecha y hora, usa rescheduleAppointment (NO bookAppointment).
+- rescheduleAppointment mueve la cita existente al nuevo cupo.
+
+- Si el paciente aún no está registrado, registerPatient antes de agendar cita nueva.
 
 FORMATO JSON:
 {"message":"tu respuesta","actions":{...}}`;
@@ -287,6 +317,8 @@ FORMATO JSON:
       actions: {
         registerPatient: parsed.actions?.registerPatient ?? null,
         bookAppointment: parsed.actions?.bookAppointment ?? null,
+        cancelAppointment: parsed.actions?.cancelAppointment ?? null,
+        rescheduleAppointment: parsed.actions?.rescheduleAppointment ?? null,
         updatePhone: parsed.actions?.updatePhone ?? null,
         updateStatus: parsed.actions?.updateStatus ?? null,
       },
