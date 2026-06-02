@@ -9,7 +9,7 @@ const knowledge = [
     content: `Clinica: Dientes Fijos Medellin
 Especialidad: Odontologia estetica, rehabilitacion oral e implantes
 Horario: Lunes a Sabado de 8:00 a.m. a 6:00 p.m.
-Direccion exacta: Calle 514 # 43-05, Centro de la ciudad de Medellin, Colombia
+Direccion exacta: Calle 51 # 43-05, Centro de la ciudad de Medellin, Colombia
 Politica de citas: Se requiere puntualidad. Cancelaciones con minimo 24 horas de anticipacion.
 Formas de pago: Efectivo, transferencia bancaria, tarjetas debito y credito. Se manejan planes de pago segun el tratamiento.
 Nota: Los precios son aproximados y pueden variar segun evaluacion clinica.`,

@@ -2,7 +2,11 @@ import { db, usersTable, aiKnowledgeTable, aiPersonalityTable, appointmentsTable
 import { eq, sql, ilike, or } from "drizzle-orm";
 import { logger } from "./logger";
 import { ensureTreatmentsCatalog } from "./treatments-catalog";
-import { DEFAULT_CLINIC_ADDRESS, buildGeneralKnowledgeContent } from "./clinic-defaults";
+import {
+  DEFAULT_CLINIC_ADDRESS,
+  buildGeneralKnowledgeContent,
+  isCanonicalClinicAddress,
+} from "./clinic-defaults";
 
 const KNOWLEDGE = [
   {
@@ -155,7 +159,7 @@ const PERSONALITY = {
   maxResponseLength: "corta",
   escalateKeywords: "emergencia,urgencia,dolor fuerte,accidente,hemorragia,sangrado",
   extraInstructions:
-    "Nunca admitas ser un bot o IA. Eres Andrea, parte del equipo de Dientes Fijos Medellín. Usa voseo y calidez paisa. Si preguntan dirección o ubicación, da siempre la dirección exacta del consultorio (Calle 514 # 43-05, centro de Medellín). Sé atenta, resuelve dudas, invita a valoración cuando tenga sentido y usa cotizaciones del panel si el paciente ya tiene presupuesto.",
+    "Nunca admitas ser un bot o IA. Eres Andrea, parte del equipo de Dientes Fijos Medellín. Usa voseo y calidez paisa. Si preguntan dirección o ubicación, da siempre la dirección exacta del consultorio (Calle 51 # 43-05, centro de Medellín). Sé atenta, resuelve dudas, invita a valoración cuando tenga sentido y usa cotizaciones del panel si el paciente ya tiene presupuesto.",
 };
 
 async function ensureClinicAddressInDatabase(): Promise<void> {
@@ -164,7 +168,7 @@ async function ensureClinicAddressInDatabase(): Promise<void> {
   const [settings] = await db.select().from(settingsTable).limit(1);
   if (settings) {
     const addr = settings.clinicAddress?.trim() ?? "";
-    if (!addr || !/514/.test(addr)) {
+    if (!isCanonicalClinicAddress(addr)) {
       await db
         .update(settingsTable)
         .set({ clinicAddress: DEFAULT_CLINIC_ADDRESS })
@@ -185,7 +189,7 @@ async function ensureClinicAddressInDatabase(): Promise<void> {
     .limit(1);
 
   if (generalEntry) {
-    if (!generalEntry.content.includes("514")) {
+    if (!isCanonicalClinicAddress(generalEntry.content)) {
       await db
         .update(aiKnowledgeTable)
         .set({ content: generalContent, updatedAt: new Date() })
@@ -195,7 +199,7 @@ async function ensureClinicAddressInDatabase(): Promise<void> {
   }
 
   const [personality] = await db.select().from(aiPersonalityTable).limit(1);
-  if (personality && !personality.extraInstructions?.includes("514")) {
+  if (personality && !personality.extraInstructions?.includes("Calle 51")) {
     await db
       .update(aiPersonalityTable)
       .set({ extraInstructions: PERSONALITY.extraInstructions, updatedAt: new Date() })

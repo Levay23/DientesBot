@@ -136,7 +136,7 @@ export default function Settings() {
                     value={form.clinicAddress}
                     onChange={e => setForm(f => ({ ...f, clinicAddress: e.target.value }))}
                     className="bg-background"
-                    placeholder="Calle 514 # 43-05, Centro de Medellín"
+                    placeholder="Calle 51 # 43-05, Centro de Medellín"
                   />
                 </div>
               </CardContent>

@@ -1,6 +1,12 @@
 /** Dirección oficial del consultorio — fuente única para IA, seed y settings. */
 export const DEFAULT_CLINIC_ADDRESS =
-  "Calle 514 # 43-05, Centro de la ciudad de Medellín, Colombia";
+  "Calle 51 # 43-05, Centro de la ciudad de Medellín, Colombia";
+
+export function isCanonicalClinicAddress(addr: string | null | undefined): boolean {
+  if (!addr?.trim()) return false;
+  const n = addr.toLowerCase().replace(/\s+/g, " ");
+  return /calle\s*51/.test(n) && /43-?05/.test(n) && !/514/.test(n);
+}
 
 export function buildGeneralKnowledgeContent(): string {
   return `Clínica: Dientes Fijos Medellín
