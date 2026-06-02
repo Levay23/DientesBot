@@ -117,9 +117,6 @@ export interface Patient {
   lastVisit?: string | null;
   nextAppointment?: string | null;
   notes?: string | null;
-   neighborhood?: string | null;
-   referralSource?: string | null;
-   city?: string | null;
   createdAt: string;
 }
 
@@ -312,7 +309,6 @@ export interface Quotation {
   id: number;
   patientId: number;
   patientName?: string;
-  patientPhone?: string;
   items: QuotationItem[];
   total: number;
   status: string;
@@ -446,6 +442,7 @@ export interface UpdateTreatmentBody {
 export interface Settings {
   clinicName: string;
   clinicPhone?: string;
+  clinicAddress?: string | null;
   workingHoursStart: string;
   workingHoursEnd: string;
   workingDays: string[];
@@ -458,6 +455,7 @@ export interface Settings {
 export interface UpdateSettingsBody {
   clinicName?: string;
   clinicPhone?: string;
+  clinicAddress?: string;
   workingHoursStart?: string;
   workingHoursEnd?: string;
   workingDays?: string[];
@@ -467,15 +465,109 @@ export interface UpdateSettingsBody {
   autoConfirmAppointments?: boolean;
 }
 
+export interface BillingSummary {
+  totalCollected: number;
+  totalThisMonth: number;
+  collectedToday: number;
+  paymentsCount: number;
+  outstandingQuotations: number;
+  outstandingBalance: number;
+}
+
+export interface Payment {
+  id: number;
+  patientId: number;
+  quotationId?: number | null;
+  treatmentName?: string | null;
+  amount: number;
+  paymentMethod: string;
+  paymentType: string;
+  concept?: string | null;
+  notes?: string | null;
+  paymentDate: string;
+  createdAt: string;
+}
+
+export type PaymentRecord = Payment & {
+  patientName?: string;
+  patientPhone?: string;
+  quotationTotal?: number | null;
+  quotationPaid?: number | null;
+  quotationBalance?: number | null;
+};
+
+export type CreatePaymentBodyPaymentMethod =
+  (typeof CreatePaymentBodyPaymentMethod)[keyof typeof CreatePaymentBodyPaymentMethod];
+
+export const CreatePaymentBodyPaymentMethod = {
+  efectivo: "efectivo",
+  transferencia: "transferencia",
+  tarjeta_debito: "tarjeta_debito",
+  tarjeta_credito: "tarjeta_credito",
+  nequi: "nequi",
+  daviplata: "daviplata",
+  otro: "otro",
+} as const;
+
+export type CreatePaymentBodyPaymentType =
+  (typeof CreatePaymentBodyPaymentType)[keyof typeof CreatePaymentBodyPaymentType];
+
+export const CreatePaymentBodyPaymentType = {
+  abono: "abono",
+  pago_completo: "pago_completo",
+  anticipo: "anticipo",
+  devolucion: "devolucion",
+} as const;
+
+export interface CreatePaymentBody {
+  patientId: number;
+  quotationId?: number | null;
+  treatmentName?: string | null;
+  amount: number;
+  paymentMethod?: CreatePaymentBodyPaymentMethod;
+  paymentType?: CreatePaymentBodyPaymentType;
+  concept?: string | null;
+  notes?: string | null;
+  paymentDate: string;
+}
+
+export interface UpdatePaymentBody {
+  quotationId?: number | null;
+  treatmentName?: string | null;
+  amount?: number;
+  paymentMethod?: string;
+  paymentType?: string;
+  concept?: string | null;
+  notes?: string | null;
+  paymentDate?: string;
+}
+
+export type PatientBillingOverviewPatient = {
+  id?: number;
+  name?: string;
+  phone?: string;
+};
+
+export type PatientBillingOverviewQuotationsItem = {
+  id?: number;
+  total?: number;
+  status?: string;
+  paid?: number;
+  balance?: number;
+  createdAt?: string;
+};
+
+export interface PatientBillingOverview {
+  patient?: PatientBillingOverviewPatient;
+  totalPaid?: number;
+  quotations?: PatientBillingOverviewQuotationsItem[];
+  payments?: Payment[];
+}
+
 export type ListPatientsParams = {
   search?: string;
   status?: string;
   treatment?: string;
-  neighborhood?: string;
-  referralSource?: string;
-  city?: string;
-  minAge?: number;
-  maxAge?: number;
 };
 
 export type ListAppointmentsParams = {
@@ -543,6 +635,14 @@ export type ListEvolutionNotes200Item = { [key: string]: unknown };
 
 export type ListQuotationsParams = {
   patientId?: number;
+};
+
+export type ListPaymentsParams = {
+  patientId?: number;
+  quotationId?: number;
+  fromDate?: string;
+  toDate?: string;
+  search?: string;
 };
 
 export type ListAiKnowledge200Item = { [key: string]: unknown };

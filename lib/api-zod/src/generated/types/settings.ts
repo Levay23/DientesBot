@@ -9,6 +9,7 @@
 export interface Settings {
   clinicName: string;
   clinicPhone?: string;
+  clinicAddress?: string | null;
   workingHoursStart: string;
   workingHoursEnd: string;
   workingDays: string[];

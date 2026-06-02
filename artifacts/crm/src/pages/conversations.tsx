@@ -14,14 +14,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
-
-function formatTime(dt: string | null | undefined) {
-  if (!dt) return "";
-  const d = new Date(dt);
-  const now = new Date();
-  if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" });
-  return d.toLocaleDateString("es-CO", { day: "numeric", month: "short" });
-}
+import { formatMessageDateTime } from "@/lib/datetime";
 
 const senderLabel: Record<string, string> = {
   patient: "Paciente",
@@ -148,7 +141,7 @@ export default function Conversations() {
                     </div>
                   </div>
                   <div className="flex flex-col items-end gap-1 flex-shrink-0">
-                    <span className="text-xs text-muted-foreground">{formatTime(conv.lastMessageAt)}</span>
+                    <span className="text-xs text-muted-foreground text-right leading-tight max-w-[9rem]">{formatMessageDateTime(conv.lastMessageAt)}</span>
                     {conv.unreadCount > 0 && (
                       <Badge className="bg-accent text-accent-foreground text-xs px-1.5 py-0 min-w-5 h-5 flex items-center justify-center">
                         {conv.unreadCount}
@@ -236,7 +229,7 @@ export default function Conversations() {
                     )}
                     <p>{msg.content}</p>
                     <p className={cn("text-xs mt-1", msg.sender === "patient" ? "text-muted-foreground" : "text-primary-foreground/70")}>
-                      {formatTime(msg.sentAt)}
+                      {formatMessageDateTime(msg.sentAt)}
                     </p>
                   </div>
                 </div>

@@ -136,7 +136,7 @@ async function sendAutomationWhatsApp(
   try {
     await sock.sendMessage(jid, { text });
     return true;
-  } catch (err) {
+    } catch (err) {
     logger.error({ err, jid, ...meta }, "Error enviando automatización por WhatsApp");
     return false;
   }
@@ -210,9 +210,9 @@ async function fetchRecentPastAppointments(): Promise<ApptWithPatient[]> {
     patientPhone: patientsTable.phone,
     treatment: appointmentsTable.treatment,
   })
-    .from(appointmentsTable)
-    .innerJoin(patientsTable, eq(appointmentsTable.patientId, patientsTable.id))
-    .where(and(
+  .from(appointmentsTable)
+  .innerJoin(patientsTable, eq(appointmentsTable.patientId, patientsTable.id))
+  .where(and(
       gte(appointmentsTable.date, weekAgoStr),
       lte(appointmentsTable.date, today),
     ));
@@ -413,7 +413,7 @@ export function startAutomationsEngine(): void {
   setInterval(() => {
     runAutomations().catch((err) => logger.error({ err }, "Error en motor de automatizaciones"));
   }, CRON_INTERVAL_MS);
-
+  
   setTimeout(() => {
     runAutomations().catch((err) => logger.error({ err }, "Error en motor de automatizaciones inicial"));
   }, 10000);

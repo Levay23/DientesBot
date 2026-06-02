@@ -9,6 +9,7 @@
 export interface UpdateSettingsBody {
   clinicName?: string;
   clinicPhone?: string;
+  clinicAddress?: string;
   workingHoursStart?: string;
   workingHoursEnd?: string;
   workingDays?: string[];

@@ -15,6 +15,7 @@ import {
   X,
   FileText,
   Syringe,
+  Wallet,
 } from "lucide-react";
 import { Button } from "./ui/button";
 import { cn } from "@/lib/utils";
@@ -29,6 +30,7 @@ const mainNav = [
   { href: "/appointments", label: "Agenda", icon: CalendarIcon },
   { href: "/treatments", label: "Tratamientos", icon: Syringe },
   { href: "/quotations", label: "Presupuestos", icon: FileText },
+  { href: "/billing", label: "Facturación", icon: Wallet },
   { href: "/conversations", label: "Chat", icon: MessageSquare },
 ];
 

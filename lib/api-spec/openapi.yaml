@@ -32,6 +32,8 @@ tags:
     description: Clinic settings
   - name: clinical
     description: Clinical records and quotations
+  - name: billing
+    description: Payments, abonos and billing control
   - name: ai-training
     description: AI knowledge and personality
 
@@ -1028,6 +1030,135 @@ paths:
               schema:
                 $ref: "#/components/schemas/MessageResponse"
 
+  /billing/summary:
+    get:
+      operationId: getBillingSummary
+      tags: [billing]
+      summary: Billing dashboard summary
+      responses:
+        "200":
+          description: Summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BillingSummary"
+
+  /billing/payments:
+    get:
+      operationId: listPayments
+      tags: [billing]
+      summary: List payments and abonos
+      parameters:
+        - name: patientId
+          in: query
+          schema:
+            type: integer
+        - name: quotationId
+          in: query
+          schema:
+            type: integer
+        - name: fromDate
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: toDate
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: search
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Payments list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PaymentRecord"
+    post:
+      operationId: createPayment
+      tags: [billing]
+      summary: Register a payment or abono
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePaymentBody"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Payment"
+
+  /billing/payments/{id}:
+    patch:
+      operationId: updatePayment
+      tags: [billing]
+      summary: Update payment
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdatePaymentBody"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Payment"
+    delete:
+      operationId: deletePayment
+      tags: [billing]
+      summary: Delete payment
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+
+  /billing/patient/{patientId}:
+    get:
+      operationId: getPatientBilling
+      tags: [billing]
+      summary: Patient billing overview
+      parameters:
+        - name: patientId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Patient billing
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PatientBillingOverview"
+
   /ai-training/knowledge:
     get:
       operationId: listAiKnowledge
@@ -1756,6 +1887,9 @@ components:
           type: string
         clinicPhone:
           type: string
+        clinicAddress:
+          type: string
+          nullable: true
         workingHoursStart:
           type: string
         workingHoursEnd:
@@ -1786,6 +1920,8 @@ components:
           type: string
         clinicPhone:
           type: string
+        clinicAddress:
+          type: string
         workingHoursStart:
           type: string
         workingHoursEnd:
@@ -1802,3 +1938,170 @@ components:
           type: string
         autoConfirmAppointments:
           type: boolean
+
+    BillingSummary:
+      type: object
+      properties:
+        totalCollected:
+          type: number
+        totalThisMonth:
+          type: number
+        collectedToday:
+          type: number
+        paymentsCount:
+          type: integer
+        outstandingQuotations:
+          type: integer
+        outstandingBalance:
+          type: number
+      required:
+        - totalCollected
+        - totalThisMonth
+        - collectedToday
+        - paymentsCount
+        - outstandingQuotations
+        - outstandingBalance
+
+    Payment:
+      type: object
+      properties:
+        id:
+          type: integer
+        patientId:
+          type: integer
+        quotationId:
+          type: integer
+          nullable: true
+        treatmentName:
+          type: string
+          nullable: true
+        amount:
+          type: integer
+        paymentMethod:
+          type: string
+        paymentType:
+          type: string
+        concept:
+          type: string
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+        paymentDate:
+          type: string
+          format: date
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, patientId, amount, paymentMethod, paymentType, paymentDate, createdAt]
+
+    PaymentRecord:
+      allOf:
+        - $ref: "#/components/schemas/Payment"
+        - type: object
+          properties:
+            patientName:
+              type: string
+            patientPhone:
+              type: string
+            quotationTotal:
+              type: number
+              nullable: true
+            quotationPaid:
+              type: number
+              nullable: true
+            quotationBalance:
+              type: number
+              nullable: true
+
+    CreatePaymentBody:
+      type: object
+      properties:
+        patientId:
+          type: integer
+        quotationId:
+          type: integer
+          nullable: true
+        treatmentName:
+          type: string
+          nullable: true
+        amount:
+          type: integer
+        paymentMethod:
+          type: string
+          enum: [efectivo, transferencia, tarjeta_debito, tarjeta_credito, nequi, daviplata, otro]
+        paymentType:
+          type: string
+          enum: [abono, pago_completo, anticipo, devolucion]
+        concept:
+          type: string
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+        paymentDate:
+          type: string
+          format: date
+      required: [patientId, amount, paymentDate]
+
+    UpdatePaymentBody:
+      type: object
+      properties:
+        quotationId:
+          type: integer
+          nullable: true
+        treatmentName:
+          type: string
+          nullable: true
+        amount:
+          type: integer
+        paymentMethod:
+          type: string
+        paymentType:
+          type: string
+        concept:
+          type: string
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+        paymentDate:
+          type: string
+          format: date
+
+    PatientBillingOverview:
+      type: object
+      properties:
+        patient:
+          type: object
+          properties:
+            id:
+              type: integer
+            name:
+              type: string
+            phone:
+              type: string
+        totalPaid:
+          type: number
+        quotations:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: integer
+              total:
+                type: number
+              status:
+                type: string
+              paid:
+                type: number
+              balance:
+                type: number
+              createdAt:
+                type: string
+                format: date-time
+        payments:
+          type: array
+          items:
+            $ref: "#/components/schemas/Payment"

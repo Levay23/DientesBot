@@ -138,11 +138,6 @@ export const ListPatientsQueryParams = zod.object({
   search: zod.coerce.string().optional(),
   status: zod.coerce.string().optional(),
   treatment: zod.coerce.string().optional(),
-  neighborhood: zod.coerce.string().optional(),
-  referralSource: zod.coerce.string().optional(),
-  city: zod.coerce.string().optional(),
-  minAge: zod.coerce.number().optional(),
-  maxAge: zod.coerce.number().optional(),
 });
 
 export const ListPatientsResponseItem = zod.object({
@@ -163,9 +158,6 @@ export const ListPatientsResponseItem = zod.object({
   lastVisit: zod.coerce.date().nullish(),
   nextAppointment: zod.coerce.date().nullish(),
   notes: zod.string().nullish(),
-  neighborhood: zod.string().nullish(),
-  referralSource: zod.string().nullish(),
-  city: zod.string().nullish(),
   createdAt: zod.coerce.date(),
 });
 export const ListPatientsResponse = zod.array(ListPatientsResponseItem);
@@ -190,9 +182,6 @@ export const CreatePatientBody = zod.object({
     ])
     .optional(),
   notes: zod.string().optional(),
-  neighborhood: zod.string().optional(),
-  referralSource: zod.string().optional(),
-  city: zod.string().optional(),
 });
 
 /**
@@ -247,9 +236,6 @@ export const UpdatePatientBody = zod.object({
     ])
     .optional(),
   notes: zod.string().optional(),
-  neighborhood: zod.string().optional(),
-  referralSource: zod.string().optional(),
-  city: zod.string().optional(),
 });
 
 export const UpdatePatientResponse = zod.object({
@@ -756,6 +742,7 @@ export const DeleteTreatmentResponse = zod.object({
 export const GetSettingsResponse = zod.object({
   clinicName: zod.string(),
   clinicPhone: zod.string().optional(),
+  clinicAddress: zod.string().nullish(),
   workingHoursStart: zod.string(),
   workingHoursEnd: zod.string(),
   workingDays: zod.array(zod.string()),
@@ -771,6 +758,7 @@ export const GetSettingsResponse = zod.object({
 export const UpdateSettingsBody = zod.object({
   clinicName: zod.string().optional(),
   clinicPhone: zod.string().optional(),
+  clinicAddress: zod.string().optional(),
   workingHoursStart: zod.string().optional(),
   workingHoursEnd: zod.string().optional(),
   workingDays: zod.array(zod.string()).optional(),
@@ -783,6 +771,7 @@ export const UpdateSettingsBody = zod.object({
 export const UpdateSettingsResponse = zod.object({
   clinicName: zod.string(),
   clinicPhone: zod.string().optional(),
+  clinicAddress: zod.string().nullish(),
   workingHoursStart: zod.string(),
   workingHoursEnd: zod.string(),
   workingDays: zod.array(zod.string()),
@@ -879,7 +868,6 @@ export const ListQuotationsResponseItem = zod.object({
   id: zod.number(),
   patientId: zod.number(),
   patientName: zod.string().optional(),
-  patientPhone: zod.string().optional(),
   items: zod.array(
     zod.object({
       service: zod.string(),
@@ -958,6 +946,171 @@ export const DeleteQuotationParams = zod.object({
 
 export const DeleteQuotationResponse = zod.object({
   message: zod.string(),
+});
+
+/**
+ * @summary Billing dashboard summary
+ */
+export const GetBillingSummaryResponse = zod.object({
+  totalCollected: zod.number(),
+  totalThisMonth: zod.number(),
+  collectedToday: zod.number(),
+  paymentsCount: zod.number(),
+  outstandingQuotations: zod.number(),
+  outstandingBalance: zod.number(),
+});
+
+/**
+ * @summary List payments and abonos
+ */
+export const ListPaymentsQueryParams = zod.object({
+  patientId: zod.coerce.number().optional(),
+  quotationId: zod.coerce.number().optional(),
+  fromDate: zod.date().optional(),
+  toDate: zod.date().optional(),
+  search: zod.coerce.string().optional(),
+});
+
+export const ListPaymentsResponseItem = zod
+  .object({
+    id: zod.number(),
+    patientId: zod.number(),
+    quotationId: zod.number().nullish(),
+    treatmentName: zod.string().nullish(),
+    amount: zod.number(),
+    paymentMethod: zod.string(),
+    paymentType: zod.string(),
+    concept: zod.string().nullish(),
+    notes: zod.string().nullish(),
+    paymentDate: zod.coerce.date(),
+    createdAt: zod.coerce.date(),
+  })
+  .and(
+    zod.object({
+      patientName: zod.string().optional(),
+      patientPhone: zod.string().optional(),
+      quotationTotal: zod.number().nullish(),
+      quotationPaid: zod.number().nullish(),
+      quotationBalance: zod.number().nullish(),
+    }),
+  );
+export const ListPaymentsResponse = zod.array(ListPaymentsResponseItem);
+
+/**
+ * @summary Register a payment or abono
+ */
+export const CreatePaymentBody = zod.object({
+  patientId: zod.number(),
+  quotationId: zod.number().nullish(),
+  treatmentName: zod.string().nullish(),
+  amount: zod.number(),
+  paymentMethod: zod
+    .enum([
+      "efectivo",
+      "transferencia",
+      "tarjeta_debito",
+      "tarjeta_credito",
+      "nequi",
+      "daviplata",
+      "otro",
+    ])
+    .optional(),
+  paymentType: zod
+    .enum(["abono", "pago_completo", "anticipo", "devolucion"])
+    .optional(),
+  concept: zod.string().nullish(),
+  notes: zod.string().nullish(),
+  paymentDate: zod.coerce.date(),
+});
+
+/**
+ * @summary Update payment
+ */
+export const UpdatePaymentParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const UpdatePaymentBody = zod.object({
+  quotationId: zod.number().nullish(),
+  treatmentName: zod.string().nullish(),
+  amount: zod.number().optional(),
+  paymentMethod: zod.string().optional(),
+  paymentType: zod.string().optional(),
+  concept: zod.string().nullish(),
+  notes: zod.string().nullish(),
+  paymentDate: zod.coerce.date().optional(),
+});
+
+export const UpdatePaymentResponse = zod.object({
+  id: zod.number(),
+  patientId: zod.number(),
+  quotationId: zod.number().nullish(),
+  treatmentName: zod.string().nullish(),
+  amount: zod.number(),
+  paymentMethod: zod.string(),
+  paymentType: zod.string(),
+  concept: zod.string().nullish(),
+  notes: zod.string().nullish(),
+  paymentDate: zod.coerce.date(),
+  createdAt: zod.coerce.date(),
+});
+
+/**
+ * @summary Delete payment
+ */
+export const DeletePaymentParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const DeletePaymentResponse = zod.object({
+  message: zod.string(),
+});
+
+/**
+ * @summary Patient billing overview
+ */
+export const GetPatientBillingParams = zod.object({
+  patientId: zod.coerce.number(),
+});
+
+export const GetPatientBillingResponse = zod.object({
+  patient: zod
+    .object({
+      id: zod.number().optional(),
+      name: zod.string().optional(),
+      phone: zod.string().optional(),
+    })
+    .optional(),
+  totalPaid: zod.number().optional(),
+  quotations: zod
+    .array(
+      zod.object({
+        id: zod.number().optional(),
+        total: zod.number().optional(),
+        status: zod.string().optional(),
+        paid: zod.number().optional(),
+        balance: zod.number().optional(),
+        createdAt: zod.coerce.date().optional(),
+      }),
+    )
+    .optional(),
+  payments: zod
+    .array(
+      zod.object({
+        id: zod.number(),
+        patientId: zod.number(),
+        quotationId: zod.number().nullish(),
+        treatmentName: zod.string().nullish(),
+        amount: zod.number(),
+        paymentMethod: zod.string(),
+        paymentType: zod.string(),
+        concept: zod.string().nullish(),
+        notes: zod.string().nullish(),
+        paymentDate: zod.coerce.date(),
+        createdAt: zod.coerce.date(),
+      }),
+    )
+    .optional(),
 });
 
 /**
