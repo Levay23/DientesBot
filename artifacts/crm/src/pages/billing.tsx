@@ -341,6 +341,25 @@ export default function Billing() {
     setAnchorPaymentId(anchor);
   };
 
+  const openEditFromHistory = (p: (typeof patientHistory)[number]) => {
+    openEdit({
+      id: p.id,
+      patientId: p.patientId,
+      patientName: selectedPatient?.name ?? "",
+      patientPhone: selectedPatient?.phone,
+      quotationId: p.quotationId,
+      treatmentName: p.treatmentName,
+      expectedTotal: p.expectedTotal,
+      amount: p.amount,
+      paymentMethod: p.paymentMethod,
+      paymentType: p.paymentType,
+      concept: p.concept,
+      notes: p.notes,
+      paymentDate: p.paymentDate,
+      createdAt: p.createdAt,
+    });
+  };
+
   const openEdit = (p: PaymentRow) => {
     setEditing(p);
     setForm({
@@ -431,8 +450,9 @@ export default function Billing() {
         },
         {
           onSuccess: () => {
-            toast({ title: "Pago actualizado" });
+            toast({ title: "Abono actualizado" });
             setDialogOpen(false);
+            setEditing(null);
             invalidate(patientId);
           },
           onError: () => toast({ variant: "destructive", title: "Error al actualizar" }),
@@ -602,19 +622,19 @@ export default function Billing() {
             </p>
           ) : (
             <div className="border border-border/40 rounded-lg overflow-hidden">
-              <div className="hidden sm:grid sm:grid-cols-[110px_1fr_120px_100px_100px_150px] gap-2 px-3 py-2 bg-muted/30 text-[10px] uppercase tracking-wide text-muted-foreground font-medium">
+              <div className="hidden sm:grid sm:grid-cols-[110px_1fr_120px_100px_100px_200px] gap-2 px-3 py-2 bg-muted/30 text-[10px] uppercase tracking-wide text-muted-foreground font-medium">
                 <span>Fecha abono</span>
                 <span>Tratamiento / concepto</span>
                 <span className="text-right">Monto</span>
                 <span>Tipo</span>
                 <span>Método</span>
-                <span className="text-center">Recibo</span>
+                <span className="text-center">Acciones</span>
               </div>
               <div className="divide-y divide-border/30 max-h-[360px] overflow-y-auto">
                 {patientHistory.map((p) => (
                   <div
                     key={p.id}
-                    className="grid grid-cols-1 sm:grid-cols-[110px_1fr_120px_100px_100px_150px] gap-2 px-3 py-3 text-sm hover:bg-muted/10"
+                    className="grid grid-cols-1 sm:grid-cols-[110px_1fr_120px_100px_100px_200px] gap-2 px-3 py-3 text-sm hover:bg-muted/10"
                   >
                     <div className="flex sm:block items-center gap-2">
                       <span className="text-[10px] uppercase text-muted-foreground sm:hidden">Fecha</span>
@@ -661,7 +681,17 @@ export default function Billing() {
                         {METHOD_LABELS[p.paymentMethod] ?? p.paymentMethod}
                       </p>
                     </div>
-                    <div className="flex sm:justify-center items-center">
+                    <div className="flex sm:justify-center items-center gap-1.5 flex-wrap">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-8 text-xs gap-1"
+                        onClick={() => openEditFromHistory(p)}
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                        Editar
+                      </Button>
                       <Button
                         type="button"
                         variant="outline"
@@ -671,7 +701,7 @@ export default function Billing() {
                         onClick={() => handleSendReceipt(p.id, selectedPatient?.phone)}
                       >
                         <Send className="h-3.5 w-3.5" />
-                        {sendingReceiptId === p.id ? "Enviando..." : "Enviar por WhatsApp"}
+                        {sendingReceiptId === p.id ? "Enviando..." : "WhatsApp"}
                       </Button>
                     </div>
                   </div>
@@ -1072,7 +1102,7 @@ export default function Billing() {
 
             <div className="space-y-2">
               <div className="flex items-center justify-between gap-2">
-                <Label>Tratamientos y abonos *</Label>
+                <Label>{editing ? "Tratamiento y monto del abono *" : "Tratamientos y abonos *"}</Label>
                 {!editing && showQuotationLines && lines.some((l) => l.lineBalance > 0) && (
                   <Button type="button" variant="outline" size="sm" onClick={payAllBalances}>
                     <Banknote className="h-3.5 w-3.5 mr-1" />
@@ -1086,7 +1116,7 @@ export default function Billing() {
                 <span className="text-right">Precio</span>
                 <span className="text-right">Pagado</span>
                 <span className="text-right">Saldo</span>
-                <span className="text-right">Abono hoy</span>
+                <span className="text-right">{editing ? "Monto" : "Abono hoy"}</span>
                 <span />
               </div>
 
@@ -1194,7 +1224,9 @@ export default function Billing() {
                     </div>
 
                     <div className="space-y-1">
-                      <Label className="text-[10px] text-muted-foreground sm:hidden">Abono hoy</Label>
+                      <Label className="text-[10px] text-muted-foreground sm:hidden">
+                        {editing ? "Monto" : "Abono hoy"}
+                      </Label>
                       <div className="flex gap-1">
                         <Input
                           type="number"
@@ -1204,7 +1236,7 @@ export default function Billing() {
                           className="bg-background text-right"
                           placeholder="0"
                         />
-                        {(line.lineBalance > 0 || line.expectedTotal > 0) && (
+                        {!editing && (line.lineBalance > 0 || line.expectedTotal > 0) && (
                           <Button
                             type="button"
                             variant="ghost"
