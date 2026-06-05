@@ -12,6 +12,7 @@ export interface CreatePaymentBody {
   patientId: number;
   quotationId?: number | null;
   treatmentName?: string | null;
+  expectedTotal?: number | null;
   amount: number;
   paymentMethod?: CreatePaymentBodyPaymentMethod;
   paymentType?: CreatePaymentBodyPaymentType;

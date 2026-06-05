@@ -479,6 +479,7 @@ export interface Payment {
   patientId: number;
   quotationId?: number | null;
   treatmentName?: string | null;
+  expectedTotal?: number | null;
   amount: number;
   paymentMethod: string;
   paymentType: string;
@@ -523,6 +524,7 @@ export interface CreatePaymentBody {
   patientId: number;
   quotationId?: number | null;
   treatmentName?: string | null;
+  expectedTotal?: number | null;
   amount: number;
   paymentMethod?: CreatePaymentBodyPaymentMethod;
   paymentType?: CreatePaymentBodyPaymentType;
@@ -534,6 +536,7 @@ export interface CreatePaymentBody {
 export interface UpdatePaymentBody {
   quotationId?: number | null;
   treatmentName?: string | null;
+  expectedTotal?: number | null;
   amount?: number;
   paymentMethod?: string;
   paymentType?: string;
@@ -548,18 +551,29 @@ export type PatientBillingOverviewPatient = {
   phone?: string;
 };
 
+export type PatientBillingOverviewQuotationsItemItemsItem = {
+  service?: string;
+  price?: number;
+  quantity?: number;
+  lineTotal?: number;
+  paid?: number;
+  balance?: number;
+};
+
 export type PatientBillingOverviewQuotationsItem = {
   id?: number;
   total?: number;
   status?: string;
   paid?: number;
   balance?: number;
+  items?: PatientBillingOverviewQuotationsItemItemsItem[];
   createdAt?: string;
 };
 
 export interface PatientBillingOverview {
   patient?: PatientBillingOverviewPatient;
   totalPaid?: number;
+  totalDebt?: number;
   quotations?: PatientBillingOverviewQuotationsItem[];
   payments?: Payment[];
 }

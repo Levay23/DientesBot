@@ -55,6 +55,7 @@ export * from "./patient";
 export * from "./patientBillingOverview";
 export * from "./patientBillingOverviewPatient";
 export * from "./patientBillingOverviewQuotationsItem";
+export * from "./patientBillingOverviewQuotationsItemItemsItem";
 export * from "./patientStatus";
 export * from "./payment";
 export * from "./paymentRecord";

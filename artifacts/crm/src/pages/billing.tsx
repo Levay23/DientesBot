@@ -8,10 +8,12 @@ import {
   useListPatients,
   useListQuotations,
   useListTreatments,
+  useGetPatientBilling,
   getListPaymentsQueryKey,
   getGetBillingSummaryQueryKey,
+  getGetPatientBillingQueryKey,
 } from "@workspace/api-client-react";
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   Plus,
@@ -22,6 +24,10 @@ import {
   Pencil,
   Trash2,
   Calendar,
+  Check,
+  ChevronsUpDown,
+  Banknote,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -43,13 +49,19 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { formatMessageDateTime } from "@/lib/datetime";
 import { cn } from "@/lib/utils";
-import { Check, ChevronsUpDown } from "lucide-react";
 
 function formatColombiaDate(d: Date = new Date()): string {
   return new Intl.DateTimeFormat("en-CA", {
@@ -66,6 +78,12 @@ function formatPriceCop(price: number) {
     currency: "COP",
     minimumFractionDigits: 0,
   }).format(price);
+}
+
+let lineIdSeq = 0;
+function newLineId() {
+  lineIdSeq += 1;
+  return `line-${lineIdSeq}`;
 }
 
 const METHOD_LABELS: Record<string, string> = {
@@ -94,6 +112,7 @@ type PaymentRow = {
   quotationTotal?: number | null;
   quotationBalance?: number | null;
   treatmentName?: string | null;
+  expectedTotal?: number | null;
   amount: number;
   paymentMethod: string;
   paymentType: string;
@@ -103,11 +122,18 @@ type PaymentRow = {
   createdAt: string;
 };
 
-const emptyForm = () => ({
+type PaymentLine = {
+  id: string;
+  treatmentName: string;
+  expectedTotal: number;
+  linePaid: number;
+  lineBalance: number;
+  abono: string;
+};
+
+const emptyMetaForm = () => ({
   patientId: "",
   quotationId: "",
-  treatmentName: "",
-  amount: "",
   paymentMethod: "efectivo",
   paymentType: "abono",
   concept: "",
@@ -115,12 +141,45 @@ const emptyForm = () => ({
   paymentDate: formatColombiaDate(),
 });
 
+function emptyCatalogLine(): PaymentLine {
+  return {
+    id: newLineId(),
+    treatmentName: "",
+    expectedTotal: 0,
+    linePaid: 0,
+    lineBalance: 0,
+    abono: "",
+  };
+}
+
+function paidForTreatment(
+  payments: { treatmentName?: string | null; quotationId?: number | null; amount: number; paymentType: string }[] | undefined,
+  treatmentName: string,
+  quotationId?: number | null,
+) {
+  if (!payments?.length || !treatmentName) return 0;
+  const key = treatmentName.toLowerCase();
+  let sum = 0;
+  for (const p of payments) {
+    if (p.treatmentName?.toLowerCase() !== key) continue;
+    if (quotationId != null) {
+      if (p.quotationId !== quotationId) continue;
+    } else if (p.quotationId != null) {
+      continue;
+    }
+    sum += p.paymentType === "devolucion" ? -p.amount : p.amount;
+  }
+  return Math.max(0, sum);
+}
+
 export default function Billing() {
   const [search, setSearch] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [patientOpen, setPatientOpen] = useState(false);
   const [editing, setEditing] = useState<PaymentRow | null>(null);
-  const [form, setForm] = useState(emptyForm);
+  const [form, setForm] = useState(emptyMetaForm);
+  const [lines, setLines] = useState<PaymentLine[]>([emptyCatalogLine()]);
+  const [saving, setSaving] = useState(false);
 
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -134,29 +193,95 @@ export default function Billing() {
   const { data: quotations } = useListQuotations();
   const { data: treatments } = useListTreatments();
 
+  const patientIdNum = form.patientId ? parseInt(form.patientId, 10) : 0;
+  const { data: patientBilling, isLoading: patientBillingLoading } = useGetPatientBilling(
+    patientIdNum,
+    { query: { enabled: patientIdNum > 0 && dialogOpen } },
+  );
+
   const createPayment = useCreatePayment();
   const updatePayment = useUpdatePayment();
   const deletePayment = useDeletePayment();
 
+  const treatmentPriceByName = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const t of treatments ?? []) {
+      if (t.active) map.set(t.name.toLowerCase(), t.price);
+    }
+    return map;
+  }, [treatments]);
+
+  const activeTreatments = useMemo(
+    () => (treatments ?? []).filter((t) => t.active).sort((a, b) => a.name.localeCompare(b.name, "es")),
+    [treatments],
+  );
+
   const patientQuotations = useMemo(() => {
-    if (!form.patientId || !quotations) return [];
+    if (!form.patientId) return [];
     const pid = parseInt(form.patientId, 10);
-    return quotations.filter((q) => q.patientId === pid);
-  }, [form.patientId, quotations]);
+    const fromBilling = patientBilling?.quotations ?? [];
+    if (fromBilling.length) return fromBilling;
+    return (quotations ?? []).filter((q) => q.patientId === pid);
+  }, [form.patientId, quotations, patientBilling?.quotations]);
 
-  const selectedQuote = useMemo(() => {
-    if (!form.quotationId) return null;
-    return patientQuotations.find((q) => q.id === parseInt(form.quotationId, 10));
-  }, [form.quotationId, patientQuotations]);
+  const selectedQuoteBilling = useMemo(() => {
+    if (!form.quotationId || !patientBilling?.quotations) return null;
+    return patientBilling.quotations.find((q) => q.id === parseInt(form.quotationId, 10)) ?? null;
+  }, [form.quotationId, patientBilling?.quotations]);
 
-  const invalidate = () => {
+  const loadLinesFromQuotation = useCallback(
+    (quotationId: string) => {
+      if (!quotationId) {
+        setLines([emptyCatalogLine()]);
+        return;
+      }
+      if (!patientBilling?.quotations) return;
+      const quote = patientBilling.quotations.find((q) => q.id === parseInt(quotationId, 10));
+      if (!quote?.items?.length) {
+        setLines([emptyCatalogLine()]);
+        return;
+      }
+      setLines(
+        quote.items.map((item) => ({
+          id: newLineId(),
+          treatmentName: item.service ?? "",
+          expectedTotal: item.lineTotal ?? Math.round((item.price ?? 0) * (item.quantity ?? 1)),
+          linePaid: item.paid ?? 0,
+          lineBalance: item.balance ?? 0,
+          abono: "",
+        })),
+      );
+    },
+    [patientBilling?.quotations],
+  );
+
+  useEffect(() => {
+    if (!dialogOpen || editing || !form.quotationId) return;
+    loadLinesFromQuotation(form.quotationId);
+  }, [dialogOpen, editing, form.quotationId, loadLinesFromQuotation, patientBilling?.quotations]);
+
+  const totalAbonoToday = useMemo(
+    () => lines.reduce((s, l) => s + (parseInt(l.abono, 10) || 0), 0),
+    [lines],
+  );
+
+  const quoteBalanceAfter = useMemo(() => {
+    if (!selectedQuoteBilling) return null;
+    return Math.max(0, (selectedQuoteBilling.balance ?? 0) - totalAbonoToday);
+  }, [selectedQuoteBilling, totalAbonoToday]);
+
+  const invalidate = (patientId?: number) => {
     queryClient.invalidateQueries({ queryKey: getListPaymentsQueryKey() });
     queryClient.invalidateQueries({ queryKey: getGetBillingSummaryQueryKey() });
+    if (patientId) {
+      queryClient.invalidateQueries({ queryKey: getGetPatientBillingQueryKey(patientId) });
+    }
   };
 
   const openCreate = () => {
     setEditing(null);
-    setForm(emptyForm());
+    setForm(emptyMetaForm());
+    setLines([emptyCatalogLine()]);
     setDialogOpen(true);
   };
 
@@ -165,62 +290,153 @@ export default function Billing() {
     setForm({
       patientId: String(p.patientId),
       quotationId: p.quotationId ? String(p.quotationId) : "",
-      treatmentName: p.treatmentName ?? "",
-      amount: String(p.amount),
       paymentMethod: p.paymentMethod,
       paymentType: p.paymentType,
       concept: p.concept ?? "",
       notes: p.notes ?? "",
       paymentDate: p.paymentDate,
     });
+    setLines([
+      {
+        id: "edit",
+        treatmentName: p.treatmentName ?? "",
+        expectedTotal: p.expectedTotal ?? 0,
+        linePaid: 0,
+        lineBalance: 0,
+        abono: String(p.amount),
+      },
+    ]);
     setDialogOpen(true);
   };
 
-  const handleSave = () => {
+  const updateLine = (idx: number, patch: Partial<PaymentLine>) => {
+    setLines((prev) => prev.map((l, i) => (i === idx ? { ...l, ...patch } : l)));
+  };
+
+  const onTreatmentSelect = (idx: number, name: string) => {
+    const price = treatmentPriceByName.get(name.toLowerCase()) ?? 0;
+    const qid = form.quotationId ? parseInt(form.quotationId, 10) : null;
+    const paid = paidForTreatment(patientBilling?.payments, name, qid);
+    const balance = Math.max(0, price - paid);
+    updateLine(idx, {
+      treatmentName: name,
+      expectedTotal: price,
+      linePaid: paid,
+      lineBalance: balance,
+    });
+  };
+
+  const payFullBalance = (idx: number) => {
+    const line = lines[idx];
+    if (!line) return;
+    const amount = line.lineBalance > 0 ? line.lineBalance : line.expectedTotal;
+    updateLine(idx, { abono: String(amount) });
+  };
+
+  const payAllBalances = () => {
+    setLines((prev) =>
+      prev.map((l) => ({
+        ...l,
+        abono: String(l.lineBalance > 0 ? l.lineBalance : l.expectedTotal > 0 ? l.expectedTotal : ""),
+      })),
+    );
+  };
+
+  const handleSave = async () => {
     const patientId = parseInt(form.patientId, 10);
-    const amount = parseInt(form.amount, 10);
-    if (!patientId || !amount || amount <= 0) {
-      toast({ variant: "destructive", title: "Paciente y monto son obligatorios" });
+    if (!patientId) {
+      toast({ variant: "destructive", title: "Selecciona un paciente" });
       return;
     }
 
-    const payload = {
-      patientId,
-      quotationId: form.quotationId ? parseInt(form.quotationId, 10) : null,
-      treatmentName: form.treatmentName || null,
-      amount,
-      paymentMethod: form.paymentMethod as "efectivo",
-      paymentType: form.paymentType as "abono",
-      concept: form.concept || null,
-      notes: form.notes || null,
-      paymentDate: form.paymentDate,
-    };
+    const quotationId = form.quotationId ? parseInt(form.quotationId, 10) : null;
 
     if (editing) {
-      const { patientId: _pid, ...updatePayload } = payload;
+      const amount = parseInt(lines[0]?.abono ?? "", 10);
+      if (!amount || amount <= 0) {
+        toast({ variant: "destructive", title: "El monto del abono es obligatorio" });
+        return;
+      }
+      const line = lines[0];
       updatePayment.mutate(
-        { id: editing.id, data: updatePayload },
+        {
+          id: editing.id,
+          data: {
+            quotationId,
+            treatmentName: line?.treatmentName || null,
+            expectedTotal: line?.expectedTotal || null,
+            amount,
+            paymentMethod: form.paymentMethod as "efectivo",
+            paymentType: form.paymentType as "abono",
+            concept: form.concept || null,
+            notes: form.notes || null,
+            paymentDate: form.paymentDate,
+          },
+        },
         {
           onSuccess: () => {
             toast({ title: "Pago actualizado" });
             setDialogOpen(false);
-            invalidate();
+            invalidate(patientId);
           },
           onError: () => toast({ variant: "destructive", title: "Error al actualizar" }),
         },
       );
-    } else {
-      createPayment.mutate(
-        { data: payload },
-        {
-          onSuccess: () => {
-            toast({ title: "Pago registrado" });
-            setDialogOpen(false);
-            invalidate();
+      return;
+    }
+
+    const toSave = lines
+      .map((l) => ({
+        ...l,
+        amount: parseInt(l.abono, 10) || 0,
+      }))
+      .filter((l) => l.amount > 0);
+
+    if (!toSave.length) {
+      toast({ variant: "destructive", title: "Ingresa al menos un monto a abonar" });
+      return;
+    }
+
+    for (const line of toSave) {
+      if (line.lineBalance > 0 && line.amount > line.lineBalance) {
+        toast({
+          variant: "destructive",
+          title: `El abono de "${line.treatmentName || "tratamiento"}" supera el saldo pendiente`,
+        });
+        return;
+      }
+    }
+
+    setSaving(true);
+    try {
+      for (const line of toSave) {
+        const isFullPay = line.lineBalance > 0 && line.amount >= line.lineBalance;
+        await createPayment.mutateAsync({
+          data: {
+            patientId,
+            quotationId,
+            treatmentName: line.treatmentName || null,
+            expectedTotal: line.expectedTotal || null,
+            amount: line.amount,
+            paymentMethod: form.paymentMethod as "efectivo",
+            paymentType: isFullPay ? "pago_completo" : (form.paymentType as "abono"),
+            concept:
+              form.concept ||
+              (line.treatmentName ? `Abono — ${line.treatmentName}` : null),
+            notes: form.notes || null,
+            paymentDate: form.paymentDate,
           },
-          onError: () => toast({ variant: "destructive", title: "Error al registrar pago" }),
-        },
-      );
+        });
+      }
+      toast({
+        title: toSave.length === 1 ? "Abono registrado" : `${toSave.length} abonos registrados`,
+      });
+      setDialogOpen(false);
+      invalidate(patientId);
+    } catch {
+      toast({ variant: "destructive", title: "Error al registrar pago(s)" });
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -238,10 +454,7 @@ export default function Billing() {
     );
   };
 
-  const activeTreatments = useMemo(
-    () => (treatments ?? []).filter((t) => t.active).sort((a, b) => a.name.localeCompare(b.name, "es")),
-    [treatments],
-  );
+  const showQuotationLines = !!form.quotationId && !editing;
 
   return (
     <Layout>
@@ -350,6 +563,11 @@ export default function Billing() {
                     </div>
                     <p className="text-sm text-muted-foreground">
                       {p.concept || p.treatmentName || "Sin concepto"}
+                      {p.expectedTotal != null && p.expectedTotal > 0 && (
+                        <span className="ml-2 text-xs">
+                          · Total tratamiento: {formatPriceCop(p.expectedTotal)}
+                        </span>
+                      )}
                       {p.quotationId != null && (
                         <span className="ml-2">
                           · Presupuesto #{p.quotationId}
@@ -399,7 +617,7 @@ export default function Billing() {
       </div>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{editing ? "Editar pago" : "Registrar pago / abono"}</DialogTitle>
           </DialogHeader>
@@ -435,6 +653,7 @@ export default function Billing() {
                             value={`${pt.name} ${pt.phone ?? ""}`}
                             onSelect={() => {
                               setForm((f) => ({ ...f, patientId: String(pt.id), quotationId: "" }));
+                              setLines([emptyCatalogLine()]);
                               setPatientOpen(false);
                             }}
                           >
@@ -455,73 +674,282 @@ export default function Billing() {
             </div>
 
             {form.patientId && (
-              <div className="space-y-1">
-                <Label>Presupuesto (opcional)</Label>
-                <Select
-                  value={form.quotationId || "__none__"}
-                  onValueChange={(v) =>
-                    setForm((f) => ({ ...f, quotationId: v === "__none__" ? "" : v }))
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Sin vincular presupuesto" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__none__">Sin presupuesto</SelectItem>
-                    {patientQuotations.map((q) => (
-                      <SelectItem key={q.id} value={String(q.id)}>
-                        #{q.id} — {formatPriceCop(q.total)} ({q.status})
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {selectedQuote && (
-                  <p className="text-xs text-muted-foreground">
-                    Total presupuesto: {formatPriceCop(selectedQuote.total)}
-                  </p>
-                )}
-              </div>
+              <>
+                {patientBillingLoading ? (
+                  <Skeleton className="h-20 w-full" />
+                ) : patientBilling ? (
+                  <Card className="border-border/50 bg-muted/20">
+                    <CardContent className="p-4 grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+                      <div>
+                        <p className="text-xs text-muted-foreground">Total abonado</p>
+                        <p className="font-semibold text-emerald-500">
+                          {formatPriceCop(patientBilling.totalPaid ?? 0)}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">Deuda presupuestos</p>
+                        <p className="font-semibold text-amber-500">
+                          {formatPriceCop(patientBilling.totalDebt ?? 0)}
+                        </p>
+                      </div>
+                      {selectedQuoteBilling && (
+                        <>
+                          <div>
+                            <p className="text-xs text-muted-foreground">
+                              Presupuesto #{selectedQuoteBilling.id}
+                            </p>
+                            <p className="font-semibold">{formatPriceCop(selectedQuoteBilling.total ?? 0)}</p>
+                          </div>
+                          <div>
+                            <p className="text-xs text-muted-foreground">Saldo presupuesto</p>
+                            <p className="font-semibold text-amber-500">
+                              {formatPriceCop(selectedQuoteBilling.balance ?? 0)}
+                            </p>
+                          </div>
+                        </>
+                      )}
+                      {totalAbonoToday > 0 && (
+                        <div className="col-span-2 sm:col-span-4 pt-2 border-t border-border/40 flex flex-wrap gap-4">
+                          <div>
+                            <p className="text-xs text-muted-foreground">Abono en este registro</p>
+                            <p className="font-semibold text-primary">{formatPriceCop(totalAbonoToday)}</p>
+                          </div>
+                          {quoteBalanceAfter != null && (
+                            <div>
+                              <p className="text-xs text-muted-foreground">Saldo después del abono</p>
+                              <p
+                                className={cn(
+                                  "font-semibold",
+                                  quoteBalanceAfter === 0 ? "text-emerald-500" : "text-amber-500",
+                                )}
+                              >
+                                {formatPriceCop(quoteBalanceAfter)}
+                                {quoteBalanceAfter === 0 && " — ¡Pagado!"}
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                ) : null}
+
+                <div className="space-y-1">
+                  <Label>Presupuesto (opcional)</Label>
+                  <Select
+                    value={form.quotationId || "__none__"}
+                    disabled={!!editing}
+                    onValueChange={(v) => {
+                      const qid = v === "__none__" ? "" : v;
+                      setForm((f) => ({ ...f, quotationId: qid }));
+                      if (!qid) setLines([emptyCatalogLine()]);
+                    }}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Sin vincular presupuesto" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">Sin presupuesto — catálogo de precios</SelectItem>
+                      {patientQuotations.map((q) => (
+                        <SelectItem key={q.id} value={String(q.id)}>
+                          #{q.id} — {formatPriceCop(q.total ?? 0)}
+                          {"balance" in q && q.balance != null && q.balance > 0
+                            ? ` · Saldo ${formatPriceCop(q.balance)}`
+                            : ""}{" "}
+                          ({q.status})
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </>
             )}
 
-            <div className="space-y-1">
-              <Label>Tratamiento / servicio (opcional)</Label>
-              <Select
-                value={form.treatmentName || "__none__"}
-                onValueChange={(v) =>
-                  setForm((f) => ({ ...f, treatmentName: v === "__none__" ? "" : v }))
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Del catálogo o manual abajo" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__none__">—</SelectItem>
-                  {activeTreatments.map((t) => (
-                    <SelectItem key={t.id} value={t.name}>
-                      {t.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Input
-                placeholder="O escribe el concepto del tratamiento"
-                value={form.treatmentName}
-                onChange={(e) => setForm((f) => ({ ...f, treatmentName: e.target.value }))}
-                className="mt-1 bg-background"
-              />
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <Label>Tratamientos y abonos *</Label>
+                {!editing && showQuotationLines && lines.some((l) => l.lineBalance > 0) && (
+                  <Button type="button" variant="outline" size="sm" onClick={payAllBalances}>
+                    <Banknote className="h-3.5 w-3.5 mr-1" />
+                    Pagar todos los saldos
+                  </Button>
+                )}
+              </div>
+
+              <div className="hidden sm:grid sm:grid-cols-[1fr_110px_90px_90px_120px_36px] gap-2 px-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+                <span>Tratamiento</span>
+                <span className="text-right">Precio</span>
+                <span className="text-right">Pagado</span>
+                <span className="text-right">Saldo</span>
+                <span className="text-right">Abono hoy</span>
+                <span />
+              </div>
+
+              <div className="space-y-2 max-h-[320px] overflow-y-auto pr-1">
+                {lines.map((line, idx) => (
+                  <div
+                    key={line.id}
+                    className="grid grid-cols-1 sm:grid-cols-[1fr_110px_90px_90px_120px_36px] gap-2 items-end bg-muted/10 p-3 rounded-lg border border-border/30"
+                  >
+                    <div className="space-y-1">
+                      <Label className="text-[10px] text-muted-foreground sm:hidden">Tratamiento</Label>
+                      {showQuotationLines ? (
+                        <p className="text-sm font-medium py-2 px-1 truncate" title={line.treatmentName}>
+                          {line.treatmentName || "—"}
+                        </p>
+                      ) : (
+                        <Select
+                          value={line.treatmentName || "__none__"}
+                          onValueChange={(v) => {
+                            if (v === "__none__") {
+                              updateLine(idx, {
+                                treatmentName: "",
+                                expectedTotal: 0,
+                                linePaid: 0,
+                                lineBalance: 0,
+                              });
+                            } else {
+                              onTreatmentSelect(idx, v);
+                            }
+                          }}
+                        >
+                          <SelectTrigger className="bg-background">
+                            <SelectValue placeholder="Seleccionar del catálogo" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="__none__">—</SelectItem>
+                            {activeTreatments.map((t) => (
+                              <SelectItem key={t.id} value={t.name}>
+                                {t.name} — {formatPriceCop(t.price)}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      )}
+                      {!showQuotationLines && (
+                        <Input
+                          placeholder="O escribe el nombre del tratamiento"
+                          value={line.treatmentName}
+                          onChange={(e) => {
+                            const name = e.target.value;
+                            const price = treatmentPriceByName.get(name.toLowerCase()) ?? line.expectedTotal;
+                            const qid = form.quotationId ? parseInt(form.quotationId, 10) : null;
+                            const paid = paidForTreatment(patientBilling?.payments, name, qid);
+                            updateLine(idx, {
+                              treatmentName: name,
+                              expectedTotal: price,
+                              linePaid: paid,
+                              lineBalance: Math.max(0, price - paid),
+                            });
+                          }}
+                          className="bg-background text-sm"
+                        />
+                      )}
+                    </div>
+
+                    <div className="space-y-1">
+                      <Label className="text-[10px] text-muted-foreground sm:hidden">Precio</Label>
+                      <Input
+                        type="number"
+                        min={0}
+                        readOnly={showQuotationLines}
+                        value={line.expectedTotal || ""}
+                        onChange={(e) => {
+                          const price = parseInt(e.target.value, 10) || 0;
+                          const paid = line.linePaid;
+                          updateLine(idx, {
+                            expectedTotal: price,
+                            lineBalance: Math.max(0, price - paid),
+                          });
+                        }}
+                        className="bg-background text-right"
+                        placeholder="0"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <Label className="text-[10px] text-muted-foreground sm:hidden">Pagado</Label>
+                      <p className="text-sm text-right py-2 text-muted-foreground tabular-nums">
+                        {line.linePaid > 0 ? formatPriceCop(line.linePaid) : "—"}
+                      </p>
+                    </div>
+
+                    <div className="space-y-1">
+                      <Label className="text-[10px] text-muted-foreground sm:hidden">Saldo</Label>
+                      <p
+                        className={cn(
+                          "text-sm text-right py-2 tabular-nums font-medium",
+                          line.lineBalance > 0 ? "text-amber-500" : "text-emerald-500",
+                        )}
+                      >
+                        {line.expectedTotal > 0
+                          ? formatPriceCop(line.lineBalance)
+                          : "—"}
+                      </p>
+                    </div>
+
+                    <div className="space-y-1">
+                      <Label className="text-[10px] text-muted-foreground sm:hidden">Abono hoy</Label>
+                      <div className="flex gap-1">
+                        <Input
+                          type="number"
+                          min={0}
+                          value={line.abono}
+                          onChange={(e) => updateLine(idx, { abono: e.target.value })}
+                          className="bg-background text-right"
+                          placeholder="0"
+                        />
+                        {(line.lineBalance > 0 || line.expectedTotal > 0) && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="shrink-0"
+                            title="Pagar saldo completo"
+                            onClick={() => payFullBalance(idx)}
+                          >
+                            <Banknote className="h-4 w-4" />
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+
+                    {!showQuotationLines && lines.length > 1 && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="text-destructive shrink-0"
+                        onClick={() => setLines((prev) => prev.filter((_, i) => i !== idx))}
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                    )}
+                    {(showQuotationLines || lines.length === 1) && <div className="hidden sm:block" />}
+                  </div>
+                ))}
+              </div>
+
+              {!editing && !showQuotationLines && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setLines((prev) => [...prev, emptyCatalogLine()])}
+                >
+                  <Plus className="h-3.5 w-3.5 mr-1" />
+                  Añadir tratamiento
+                </Button>
+              )}
+
+              {totalAbonoToday > 0 && (
+                <p className="text-sm text-right font-semibold text-primary">
+                  Total a registrar: {formatPriceCop(totalAbonoToday)}
+                </p>
+              )}
             </div>
 
             <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1">
-                <Label>Monto (COP) *</Label>
-                <Input
-                  type="number"
-                  min={1}
-                  value={form.amount}
-                  onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))}
-                  className="bg-background"
-                />
-              </div>
               <div className="space-y-1">
                 <Label>Fecha del pago *</Label>
                 <Input
@@ -531,9 +959,6 @@ export default function Billing() {
                   className="bg-background"
                 />
               </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">
                 <Label>Tipo</Label>
                 <Select
@@ -552,28 +977,29 @@ export default function Billing() {
                   </SelectContent>
                 </Select>
               </div>
-              <div className="space-y-1">
-                <Label>Método</Label>
-                <Select
-                  value={form.paymentMethod}
-                  onValueChange={(v) => setForm((f) => ({ ...f, paymentMethod: v }))}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {Object.entries(METHOD_LABELS).map(([k, label]) => (
-                      <SelectItem key={k} value={k}>
-                        {label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
             </div>
 
             <div className="space-y-1">
-              <Label>Concepto</Label>
+              <Label>Método de pago</Label>
+              <Select
+                value={form.paymentMethod}
+                onValueChange={(v) => setForm((f) => ({ ...f, paymentMethod: v }))}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {Object.entries(METHOD_LABELS).map(([k, label]) => (
+                    <SelectItem key={k} value={k}>
+                      {label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1">
+              <Label>Concepto (opcional)</Label>
               <Input
                 value={form.concept}
                 onChange={(e) => setForm((f) => ({ ...f, concept: e.target.value }))}
@@ -598,9 +1024,9 @@ export default function Billing() {
             </Button>
             <Button
               onClick={handleSave}
-              disabled={createPayment.isPending || updatePayment.isPending}
+              disabled={saving || createPayment.isPending || updatePayment.isPending}
             >
-              {editing ? "Guardar cambios" : "Registrar"}
+              {editing ? "Guardar cambios" : saving ? "Registrando..." : "Registrar abono(s)"}
             </Button>
           </DialogFooter>
         </DialogContent>

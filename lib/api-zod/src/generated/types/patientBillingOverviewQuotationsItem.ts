@@ -5,6 +5,7 @@
  * Dientes Fijos Medellín CRM API
  * OpenAPI spec version: 0.1.0
  */
+import type { PatientBillingOverviewQuotationsItemItemsItem } from "./patientBillingOverviewQuotationsItemItemsItem";
 
 export type PatientBillingOverviewQuotationsItem = {
   id?: number;
@@ -12,5 +13,6 @@ export type PatientBillingOverviewQuotationsItem = {
   status?: string;
   paid?: number;
   balance?: number;
+  items?: PatientBillingOverviewQuotationsItemItemsItem[];
   createdAt?: Date;
 };

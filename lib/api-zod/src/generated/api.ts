@@ -977,6 +977,7 @@ export const ListPaymentsResponseItem = zod
     patientId: zod.number(),
     quotationId: zod.number().nullish(),
     treatmentName: zod.string().nullish(),
+    expectedTotal: zod.number().nullish(),
     amount: zod.number(),
     paymentMethod: zod.string(),
     paymentType: zod.string(),
@@ -1003,6 +1004,7 @@ export const CreatePaymentBody = zod.object({
   patientId: zod.number(),
   quotationId: zod.number().nullish(),
   treatmentName: zod.string().nullish(),
+  expectedTotal: zod.number().nullish(),
   amount: zod.number(),
   paymentMethod: zod
     .enum([
@@ -1033,6 +1035,7 @@ export const UpdatePaymentParams = zod.object({
 export const UpdatePaymentBody = zod.object({
   quotationId: zod.number().nullish(),
   treatmentName: zod.string().nullish(),
+  expectedTotal: zod.number().nullish(),
   amount: zod.number().optional(),
   paymentMethod: zod.string().optional(),
   paymentType: zod.string().optional(),
@@ -1046,6 +1049,7 @@ export const UpdatePaymentResponse = zod.object({
   patientId: zod.number(),
   quotationId: zod.number().nullish(),
   treatmentName: zod.string().nullish(),
+  expectedTotal: zod.number().nullish(),
   amount: zod.number(),
   paymentMethod: zod.string(),
   paymentType: zod.string(),
@@ -1082,6 +1086,7 @@ export const GetPatientBillingResponse = zod.object({
     })
     .optional(),
   totalPaid: zod.number().optional(),
+  totalDebt: zod.number().optional(),
   quotations: zod
     .array(
       zod.object({
@@ -1090,6 +1095,18 @@ export const GetPatientBillingResponse = zod.object({
         status: zod.string().optional(),
         paid: zod.number().optional(),
         balance: zod.number().optional(),
+        items: zod
+          .array(
+            zod.object({
+              service: zod.string().optional(),
+              price: zod.number().optional(),
+              quantity: zod.number().optional(),
+              lineTotal: zod.number().optional(),
+              paid: zod.number().optional(),
+              balance: zod.number().optional(),
+            }),
+          )
+          .optional(),
         createdAt: zod.coerce.date().optional(),
       }),
     )
@@ -1101,6 +1118,7 @@ export const GetPatientBillingResponse = zod.object({
         patientId: zod.number(),
         quotationId: zod.number().nullish(),
         treatmentName: zod.string().nullish(),
+        expectedTotal: zod.number().nullish(),
         amount: zod.number(),
         paymentMethod: zod.string(),
         paymentType: zod.string(),

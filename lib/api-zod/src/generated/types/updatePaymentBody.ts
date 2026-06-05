@@ -9,6 +9,7 @@
 export interface UpdatePaymentBody {
   quotationId?: number | null;
   treatmentName?: string | null;
+  expectedTotal?: number | null;
   amount?: number;
   paymentMethod?: string;
   paymentType?: string;

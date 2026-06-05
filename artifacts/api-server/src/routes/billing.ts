@@ -22,6 +22,7 @@ const createPaymentSchema = z.object({
   patientId: z.number().int().positive(),
   quotationId: z.number().int().positive().optional().nullable(),
   treatmentName: z.string().optional().nullable(),
+  expectedTotal: z.number().int().nonnegative().optional().nullable(),
   amount: z.number().int().positive(),
   paymentMethod: paymentMethodEnum.default("efectivo"),
   paymentType: paymentTypeEnum.default("abono"),
@@ -152,6 +153,7 @@ router.get("/billing/payments", async (req, res): Promise<void> => {
       quotationId: paymentsTable.quotationId,
       quotationTotal: quotationsTable.total,
       treatmentName: paymentsTable.treatmentName,
+      expectedTotal: paymentsTable.expectedTotal,
       amount: paymentsTable.amount,
       paymentMethod: paymentsTable.paymentMethod,
       paymentType: paymentsTable.paymentType,
@@ -212,19 +214,50 @@ router.get("/billing/patient/:patientId", async (req, res): Promise<void> => {
 
   const quotationsWithBalance = quotes.map((q) => {
     const paid = paidMap.get(q.id) ?? 0;
+    const items = (q.items as { service: string; price: number; quantity?: number }[]).map((item) => {
+      const lineTotal = Math.round(item.price * (item.quantity ?? 1));
+      const linePaid = payments
+        .filter(
+          (p) =>
+            p.quotationId === q.id &&
+            p.treatmentName?.toLowerCase() === item.service.toLowerCase() &&
+            p.paymentType !== "devolucion",
+        )
+        .reduce((s, p) => s + p.amount, 0)
+        - payments
+          .filter(
+            (p) =>
+              p.quotationId === q.id &&
+              p.treatmentName?.toLowerCase() === item.service.toLowerCase() &&
+              p.paymentType === "devolucion",
+          )
+          .reduce((s, p) => s + p.amount, 0);
+      return {
+        service: item.service,
+        price: item.price,
+        quantity: item.quantity ?? 1,
+        lineTotal,
+        paid: linePaid,
+        balance: Math.max(0, lineTotal - linePaid),
+      };
+    });
     return {
       id: q.id,
       total: q.total,
       status: q.status,
       paid,
       balance: computeBalance(q.total, paid),
+      items,
       createdAt: q.createdAt,
     };
   });
 
+  const totalDebt = quotationsWithBalance.reduce((s, q) => s + q.balance, 0);
+
   res.json({
     patient: { id: patient.id, name: patient.name, phone: patient.phone },
     totalPaid,
+    totalDebt,
     quotations: quotationsWithBalance,
     payments,
   });
@@ -256,6 +289,7 @@ router.post("/billing/payments", async (req, res): Promise<void> => {
       patientId: data.patientId,
       quotationId: data.quotationId ?? null,
       treatmentName: data.treatmentName ?? null,
+      expectedTotal: data.expectedTotal ?? null,
       amount: data.amount,
       paymentMethod: data.paymentMethod,
       paymentType: data.paymentType,
@@ -306,6 +340,7 @@ router.patch("/billing/payments/:id", async (req, res): Promise<void> => {
     .set({
       ...(data.quotationId !== undefined ? { quotationId: data.quotationId } : {}),
       ...(data.treatmentName !== undefined ? { treatmentName: data.treatmentName } : {}),
+      ...(data.expectedTotal !== undefined ? { expectedTotal: data.expectedTotal } : {}),
       ...(data.amount !== undefined ? { amount: data.amount } : {}),
       ...(data.paymentMethod !== undefined ? { paymentMethod: data.paymentMethod } : {}),
       ...(data.paymentType !== undefined ? { paymentType: data.paymentType } : {}),

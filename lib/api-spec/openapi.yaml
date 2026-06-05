@@ -1975,6 +1975,9 @@ components:
         treatmentName:
           type: string
           nullable: true
+        expectedTotal:
+          type: integer
+          nullable: true
         amount:
           type: integer
         paymentMethod:
@@ -2025,6 +2028,9 @@ components:
         treatmentName:
           type: string
           nullable: true
+        expectedTotal:
+          type: integer
+          nullable: true
         amount:
           type: integer
         paymentMethod:
@@ -2052,6 +2058,9 @@ components:
           nullable: true
         treatmentName:
           type: string
+          nullable: true
+        expectedTotal:
+          type: integer
           nullable: true
         amount:
           type: integer
@@ -2083,6 +2092,8 @@ components:
               type: string
         totalPaid:
           type: number
+        totalDebt:
+          type: number
         quotations:
           type: array
           items:
@@ -2098,6 +2109,23 @@ components:
                 type: number
               balance:
                 type: number
+              items:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    service:
+                      type: string
+                    price:
+                      type: number
+                    quantity:
+                      type: number
+                    lineTotal:
+                      type: number
+                    paid:
+                      type: number
+                    balance:
+                      type: number
               createdAt:
                 type: string
                 format: date-time

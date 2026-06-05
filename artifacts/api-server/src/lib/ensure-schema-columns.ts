@@ -6,5 +6,6 @@ import { logger } from "./logger";
 export async function ensureSchemaColumns(): Promise<void> {
   await db.execute(sql`ALTER TABLE patients ADD COLUMN IF NOT EXISTS cedula TEXT`);
   await db.execute(sql`ALTER TABLE quotations ADD COLUMN IF NOT EXISTS observations TEXT`);
-  logger.info("Columnas patients.cedula y quotations.observations verificadas");
+  await db.execute(sql`ALTER TABLE payments ADD COLUMN IF NOT EXISTS expected_total INTEGER`);
+  logger.info("Columnas patients.cedula, quotations.observations y payments.expected_total verificadas");
 }
