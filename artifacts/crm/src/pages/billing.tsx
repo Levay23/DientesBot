@@ -90,6 +90,67 @@ function formatPaymentDate(dateStr: string) {
   return `${d}/${m}/${y}`;
 }
 
+function PatientBillingSummary({
+  billing,
+  compact,
+}: {
+  billing: {
+    totalPaid?: number;
+    totalOwed?: number;
+    remainingDebt?: number;
+    totalDebt?: number;
+  };
+  compact?: boolean;
+}) {
+  const abonoTotal = billing.totalPaid ?? 0;
+  const deudaTotal = billing.totalOwed ?? 0;
+  const deudaRestante = billing.remainingDebt ?? billing.totalDebt ?? 0;
+
+  return (
+    <div className={compact ? "space-y-2" : "space-y-3"}>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
+        <div className="rounded-lg border border-emerald-500/30 p-3 bg-emerald-500/5">
+          <p className="text-xs text-muted-foreground">Abono total</p>
+          <p className="text-xl font-bold text-emerald-500">{formatPriceCop(abonoTotal)}</p>
+          <p className="text-[10px] text-muted-foreground mt-1">Todo lo pagado por el paciente</p>
+        </div>
+        <div className="rounded-lg border border-border/40 p-3 bg-muted/10">
+          <p className="text-xs text-muted-foreground">Deuda total</p>
+          <p className="text-xl font-bold text-foreground">{formatPriceCop(deudaTotal)}</p>
+          <p className="text-[10px] text-muted-foreground mt-1">Presupuestos + tratamientos</p>
+        </div>
+        <div
+          className={cn(
+            "rounded-lg border p-3",
+            deudaRestante > 0
+              ? "border-amber-500/40 bg-amber-500/5"
+              : "border-emerald-500/30 bg-emerald-500/5",
+          )}
+        >
+          <p className="text-xs text-muted-foreground">Deuda restante</p>
+          <p
+            className={cn(
+              "text-xl font-bold",
+              deudaRestante > 0 ? "text-amber-500" : "text-emerald-500",
+            )}
+          >
+            {formatPriceCop(deudaRestante)}
+          </p>
+          <p className="text-[10px] text-muted-foreground mt-1">
+            {deudaRestante > 0 ? "Falta por cobrar" : "Sin saldo pendiente"}
+          </p>
+        </div>
+      </div>
+      {!compact && deudaTotal > 0 && (
+        <p className="text-xs text-muted-foreground text-center px-2">
+          Deuda restante = Deuda total ({formatPriceCop(deudaTotal)}) − Abonos aplicados (
+          {formatPriceCop(Math.max(0, deudaTotal - deudaRestante))})
+        </p>
+      )}
+    </div>
+  );
+}
+
 let lineIdSeq = 0;
 function newLineId() {
   lineIdSeq += 1;
@@ -585,30 +646,18 @@ export default function Billing() {
         {selectedPatientBillingLoading ? (
           <Skeleton className="h-16 w-full" />
         ) : selectedPatientBilling ? (
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
-            <div className="rounded-lg border border-border/40 p-3 bg-muted/10">
-              <p className="text-xs text-muted-foreground">Total abonado</p>
-              <p className="font-semibold text-emerald-500">
-                {formatPriceCop(selectedPatientBilling.totalPaid ?? 0)}
-              </p>
-            </div>
-            <div className="rounded-lg border border-border/40 p-3 bg-muted/10">
-              <p className="text-xs text-muted-foreground">Deuda pendiente</p>
-              <p className="font-semibold text-amber-500">
-                {formatPriceCop(selectedPatientBilling.totalDebt ?? 0)}
-              </p>
-            </div>
-            <div className="rounded-lg border border-border/40 p-3 bg-muted/10 col-span-2 sm:col-span-1">
-              <p className="text-xs text-muted-foreground">Abonos registrados</p>
-              <p className="font-semibold">{patientHistory.length}</p>
-            </div>
-          </div>
+          <PatientBillingSummary billing={selectedPatientBilling} />
         ) : null}
 
         <div className="space-y-2">
-          <div className="flex items-center gap-2">
-            <History className="h-4 w-4 text-muted-foreground" />
-            <h3 className="font-semibold text-sm">Historial de abonos</h3>
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <History className="h-4 w-4 text-muted-foreground" />
+              <h3 className="font-semibold text-sm">Historial de abonos</h3>
+              {patientHistory.length > 0 && (
+                <span className="text-xs text-muted-foreground">({patientHistory.length})</span>
+              )}
+            </div>
           </div>
           {selectedPatientBillingLoading ? (
             <div className="space-y-2">
@@ -1014,34 +1063,23 @@ export default function Billing() {
                   <Skeleton className="h-20 w-full" />
                 ) : patientBilling ? (
                   <Card className="border-border/50 bg-muted/20">
-                    <CardContent className="p-4 grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
-                      <div>
-                        <p className="text-xs text-muted-foreground">Total abonado</p>
-                        <p className="font-semibold text-emerald-500">
-                          {formatPriceCop(patientBilling.totalPaid ?? 0)}
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-xs text-muted-foreground">Deuda presupuestos</p>
-                        <p className="font-semibold text-amber-500">
-                          {formatPriceCop(patientBilling.totalDebt ?? 0)}
-                        </p>
-                      </div>
+                    <CardContent className="p-4 space-y-3">
+                      <PatientBillingSummary billing={patientBilling} compact />
                       {selectedQuoteBilling && (
-                        <>
+                        <div className="grid grid-cols-2 gap-3 pt-2 border-t border-border/40 text-sm">
                           <div>
                             <p className="text-xs text-muted-foreground">
-                              Presupuesto #{selectedQuoteBilling.id}
+                              Presupuesto #{selectedQuoteBilling.id} — deuda total
                             </p>
                             <p className="font-semibold">{formatPriceCop(selectedQuoteBilling.total ?? 0)}</p>
                           </div>
                           <div>
-                            <p className="text-xs text-muted-foreground">Saldo presupuesto</p>
+                            <p className="text-xs text-muted-foreground">Deuda restante presupuesto</p>
                             <p className="font-semibold text-amber-500">
                               {formatPriceCop(selectedQuoteBilling.balance ?? 0)}
                             </p>
                           </div>
-                        </>
+                        </div>
                       )}
                       {totalAbonoToday > 0 && (
                         <div className="col-span-2 sm:col-span-4 pt-2 border-t border-border/40 flex flex-wrap gap-4">

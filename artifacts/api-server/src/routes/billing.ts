@@ -2,7 +2,7 @@ import { Router, type IRouter } from "express";
 import { db, paymentsTable, patientsTable, quotationsTable, settingsTable } from "@workspace/db";
 import { eq, desc, and, gte, lte, ilike, or, sql, inArray } from "drizzle-orm";
 import { z } from "zod";
-import { signedPaymentAmount, computeBalance } from "../lib/billing-utils";
+import { signedPaymentAmount, computeBalance, summarizePatientBilling } from "../lib/billing-utils";
 import { getWhatsAppSock, getWAState, phoneToJid } from "../lib/whatsapp";
 import { generatePaymentReceiptImage } from "../lib/payment-receipt-image";
 import { logger } from "../lib/logger";
@@ -230,54 +230,37 @@ router.get("/billing/patient/:patientId", async (req, res): Promise<void> => {
     .orderBy(desc(quotationsTable.createdAt));
 
   const paidMap = await getPaidByQuotation(quotes.map((q) => q.id));
-  const totalPaid = payments.reduce((s, p) => s + signedPaymentAmount(p.amount, p.paymentType), 0);
+
+  const summary = summarizePatientBilling(
+    quotes.map((q) => ({
+      id: q.id,
+      total: q.total,
+      items: q.items as { service: string; price: number; quantity?: number }[],
+    })),
+    payments,
+    paidMap,
+    patient.treatmentPrice,
+  );
 
   const quotationsWithBalance = quotes.map((q) => {
-    const paid = paidMap.get(q.id) ?? 0;
-    const items = (q.items as { service: string; price: number; quantity?: number }[]).map((item) => {
-      const lineTotal = Math.round(item.price * (item.quantity ?? 1));
-      const linePaid = payments
-        .filter(
-          (p) =>
-            p.quotationId === q.id &&
-            p.treatmentName?.toLowerCase() === item.service.toLowerCase() &&
-            p.paymentType !== "devolucion",
-        )
-        .reduce((s, p) => s + p.amount, 0)
-        - payments
-          .filter(
-            (p) =>
-              p.quotationId === q.id &&
-              p.treatmentName?.toLowerCase() === item.service.toLowerCase() &&
-              p.paymentType === "devolucion",
-          )
-          .reduce((s, p) => s + p.amount, 0);
-      return {
-        service: item.service,
-        price: item.price,
-        quantity: item.quantity ?? 1,
-        lineTotal,
-        paid: linePaid,
-        balance: Math.max(0, lineTotal - linePaid),
-      };
-    });
+    const enriched = summary.quotationsWithBalance.find((x) => x.id === q.id)!;
     return {
       id: q.id,
       total: q.total,
       status: q.status,
-      paid,
-      balance: computeBalance(q.total, paid),
-      items,
+      paid: enriched.paid,
+      balance: enriched.balance,
+      items: enriched.items,
       createdAt: q.createdAt,
     };
   });
 
-  const totalDebt = quotationsWithBalance.reduce((s, q) => s + q.balance, 0);
-
   res.json({
     patient: { id: patient.id, name: patient.name, phone: patient.phone },
-    totalPaid,
-    totalDebt,
+    totalPaid: summary.totalPaid,
+    totalOwed: summary.totalOwed,
+    remainingDebt: summary.remainingDebt,
+    totalDebt: summary.remainingDebt,
     quotations: quotationsWithBalance,
     payments,
   });

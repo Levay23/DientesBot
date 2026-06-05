@@ -2124,8 +2124,13 @@ components:
               type: string
         totalPaid:
           type: number
+        totalOwed:
+          type: number
+        remainingDebt:
+          type: number
         totalDebt:
           type: number
+          description: Alias de remainingDebt (deuda restante)
         quotations:
           type: array
           items:

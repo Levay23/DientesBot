@@ -12,6 +12,9 @@ import type { Payment } from "./payment";
 export interface PatientBillingOverview {
   patient?: PatientBillingOverviewPatient;
   totalPaid?: number;
+  totalOwed?: number;
+  remainingDebt?: number;
+  /** Alias de remainingDebt (deuda restante) */
   totalDebt?: number;
   quotations?: PatientBillingOverviewQuotationsItem[];
   payments?: Payment[];

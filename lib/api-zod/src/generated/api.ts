@@ -1098,7 +1098,12 @@ export const GetPatientBillingResponse = zod.object({
     })
     .optional(),
   totalPaid: zod.number().optional(),
-  totalDebt: zod.number().optional(),
+  totalOwed: zod.number().optional(),
+  remainingDebt: zod.number().optional(),
+  totalDebt: zod
+    .number()
+    .optional()
+    .describe("Alias de remainingDebt (deuda restante)"),
   quotations: zod
     .array(
       zod.object({
