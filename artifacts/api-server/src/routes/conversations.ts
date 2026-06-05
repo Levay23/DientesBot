@@ -196,21 +196,29 @@ router.post("/conversations/incoming", async (req, res): Promise<void> => {
     const availableSlots = await getAvailableSlots();
     aiResult = await generateAIResponse(conv.id, message, { availableSlots });
 
-    const { conversation: updatedConv, bookingOutcome } = await processAIActions(
-      {
-        id: conv.id,
-        patientId: conv.patientId,
-        patientName: conv.patientName,
-        phone: formattedPhone,
-      },
-      formattedPhone,
-      aiResult.actions,
-      "incoming",
-      { patientMessage: message },
-    );
-    conv = { ...conv, ...updatedConv };
-
-    const aiText = amendAiMessageIfBookingFailed(aiResult.message, bookingOutcome);
+    let aiText = "";
+    try {
+      const { conversation: updatedConv, bookingOutcome } = await processAIActions(
+        {
+          id: conv.id,
+          patientId: conv.patientId,
+          patientName: conv.patientName,
+          phone: formattedPhone,
+        },
+        formattedPhone,
+        aiResult.actions,
+        "incoming",
+        { patientMessage: message },
+      );
+      conv = { ...conv, ...updatedConv };
+      aiText = amendAiMessageIfBookingFailed(aiResult.message, bookingOutcome);
+    } catch (actionErr) {
+      logger.error({ actionErr }, "Error en acciones IA incoming; se envía respuesta igual");
+      aiText = aiResult.message;
+    }
+    if (!aiText?.trim()) {
+      aiText = "Hola, gracias por escribirnos. ¿En qué puedo ayudarte?";
+    }
 
     if (!aiText) {
       res.status(201).json({ conversation: conv, aiResponse: null });

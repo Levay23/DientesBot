@@ -20,6 +20,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 
 type QuotationItem = { service: string; price: number; quantity: number };
@@ -36,6 +37,7 @@ export default function Quotations() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [search, setSearch] = useState("");
   const [customServiceRows, setCustomServiceRows] = useState<Set<number>>(new Set());
+  const [observations, setObservations] = useState("");
   
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -103,6 +105,7 @@ export default function Quotations() {
       }
     });
     setCustomServiceRows(custom);
+    setObservations((q as { observations?: string }).observations ?? "");
     setDialogOpen(true);
   };
 
@@ -112,6 +115,7 @@ export default function Quotations() {
     setItems([{ service: "", price: 0, quantity: 1 }]);
     setSelectedPatientId("");
     setCustomServiceRows(new Set());
+    setObservations("");
   };
 
   const handleDelete = async (id: number) => {
@@ -162,7 +166,8 @@ export default function Quotations() {
       patientId: parseInt(selectedPatientId),
       items,
       total,
-      sendToWhatsApp
+      observations: observations.trim() || undefined,
+      sendToWhatsApp,
     };
 
     if (editingId) {
@@ -257,6 +262,11 @@ export default function Quotations() {
                           <span>${(item.price * (item.quantity || 1)).toLocaleString()}</span>
                         </div>
                       ))}
+                      {(q as { observations?: string }).observations && (
+                        <p className="mt-2 pt-2 border-t border-border/20 text-foreground/80 italic">
+                          Obs: {(q as { observations?: string }).observations}
+                        </p>
+                      )}
                     </div>
                   </div>
                 </CardContent>
@@ -384,6 +394,17 @@ export default function Quotations() {
                   </div>
                 ))}
               </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Observaciones del presupuesto</Label>
+              <Textarea
+                value={observations}
+                onChange={(e) => setObservations(e.target.value)}
+                className="bg-background"
+                rows={3}
+                placeholder="Notas, condiciones, validez, recomendaciones para el paciente..."
+              />
             </div>
 
             <div className="pt-4 border-t border-border/50 flex justify-between items-center">

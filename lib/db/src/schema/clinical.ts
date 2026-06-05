@@ -7,6 +7,7 @@ export const quotationsTable = pgTable("quotations", {
   items: jsonb("items").notNull().$type<{ service: string; price: number }[]>(),
   total: integer("total").notNull(),
   status: text("status").notNull().default("draft"), // draft, sent, approved
+  observations: text("observations"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

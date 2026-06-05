@@ -286,25 +286,38 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo): Promise<void> 
     logger.info({ phone: formattedPhone, aiMode: latestConv?.aiMode, globalBotEnabled, aiEnabled }, "Evaluando si responder con IA");
 
     if (aiEnabled) {
+      let aiText = "";
       try {
         const availableSlots = await getAvailableSlots();
         const aiResult = await generateAIResponse(conv.id, text, { availableSlots });
 
-        const { conversation: updatedConv, bookingOutcome } = await processAIActions(
-          {
-            id: conv.id,
-            patientId: conv.patientId,
-            patientName: conv.patientName,
-            phone: formattedPhone,
-          },
-          formattedPhone,
-          aiResult.actions,
-          "whatsapp",
-          { patientMessage: text },
-        );
-        conv = { ...conv, ...updatedConv };
+        try {
+          const { conversation: updatedConv, bookingOutcome } = await processAIActions(
+            {
+              id: conv.id,
+              patientId: conv.patientId,
+              patientName: conv.patientName,
+              phone: formattedPhone,
+            },
+            formattedPhone,
+            aiResult.actions,
+            "whatsapp",
+            { patientMessage: text },
+          );
+          conv = { ...conv, ...updatedConv };
+          aiText = amendAiMessageIfBookingFailed(aiResult.message, bookingOutcome);
+        } catch (actionErr) {
+          logger.error({ actionErr, conversationId: conv.id }, "Error en acciones IA; se envía respuesta al paciente igual");
+          aiText = aiResult.message;
+        }
 
-        const aiText = amendAiMessageIfBookingFailed(aiResult.message, bookingOutcome);
+        if (!aiText?.trim()) {
+          aiText = "Hola, gracias por escribirnos. ¿En qué puedo ayudarte hoy?";
+        }
+      } catch (err) {
+        logger.error({ err, conversationId: conv.id }, "Error generando respuesta IA");
+        aiText = "Hola, gracias por contactar a Dientes Fijos Medellín. En un momento te damos la información. ¿En qué podemos ayudarte?";
+      }
 
         if (aiText) {
           await db.insert(messagesTable).values({
@@ -343,9 +356,6 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo): Promise<void> 
       logger.error({ jid: outboundJid, status: _state.status }, "CRÍTICO: No se pudo enviar mensaje (sock o JID inválido)");
     }
         }
-    } catch (err) {
-      logger.error({ err }, "Error procesando respuesta IA");
-    }
   }
 } catch (err) {
   logger.error({ err }, "Error procesando mensaje entrante");

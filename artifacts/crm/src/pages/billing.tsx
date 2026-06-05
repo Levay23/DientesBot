@@ -42,10 +42,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { formatMessageDateTime } from "@/lib/datetime";
+import { cn } from "@/lib/utils";
+import { Check, ChevronsUpDown } from "lucide-react";
 
 function formatColombiaDate(d: Date = new Date()): string {
   return new Intl.DateTimeFormat("en-CA", {
@@ -114,6 +118,7 @@ const emptyForm = () => ({
 export default function Billing() {
   const [search, setSearch] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [patientOpen, setPatientOpen] = useState(false);
   const [editing, setEditing] = useState<PaymentRow | null>(null);
   const [form, setForm] = useState(emptyForm);
 
@@ -401,22 +406,52 @@ export default function Billing() {
           <div className="space-y-4 py-2">
             <div className="space-y-1">
               <Label>Paciente *</Label>
-              <Select
-                value={form.patientId}
-                onValueChange={(v) => setForm((f) => ({ ...f, patientId: v, quotationId: "" }))}
-                disabled={!!editing}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Seleccionar paciente" />
-                </SelectTrigger>
-                <SelectContent>
-                  {(patients ?? []).map((pt) => (
-                    <SelectItem key={pt.id} value={String(pt.id)}>
-                      {pt.name} {pt.phone ? `· ${pt.phone}` : ""}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <Popover open={patientOpen} onOpenChange={setPatientOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    role="combobox"
+                    disabled={!!editing}
+                    className="w-full justify-between bg-background font-normal"
+                  >
+                    {form.patientId
+                      ? (() => {
+                          const p = patients?.find((pt) => String(pt.id) === form.patientId);
+                          return p ? `${p.name}${p.phone ? ` · ${p.phone}` : ""}` : "Seleccionar paciente";
+                        })()
+                      : "Buscar paciente por nombre o teléfono..."}
+                    <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
+                  <Command>
+                    <CommandInput placeholder="Buscar paciente..." />
+                    <CommandList className="max-h-[280px] overflow-y-auto">
+                      <CommandEmpty>No se encontró el paciente.</CommandEmpty>
+                      <CommandGroup>
+                        {(patients ?? []).map((pt) => (
+                          <CommandItem
+                            key={pt.id}
+                            value={`${pt.name} ${pt.phone ?? ""}`}
+                            onSelect={() => {
+                              setForm((f) => ({ ...f, patientId: String(pt.id), quotationId: "" }));
+                              setPatientOpen(false);
+                            }}
+                          >
+                            <Check
+                              className={cn(
+                                "mr-2 h-4 w-4",
+                                form.patientId === String(pt.id) ? "opacity-100" : "opacity-0",
+                              )}
+                            />
+                            {pt.name} {pt.phone ? `· ${pt.phone}` : ""}
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
             </div>
 
             {form.patientId && (

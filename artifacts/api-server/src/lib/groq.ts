@@ -327,7 +327,10 @@ FORMATO JSON:
     };
   } catch (err) {
     logger.error({ err }, "Error AI");
-    throw err;
+    return {
+      message: "Hola, gracias por escribirnos a Dientes Fijos Medellín. Cuéntame, ¿en qué puedo ayudarte?",
+      actions: {},
+    };
   }
 }
 

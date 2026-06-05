@@ -48,6 +48,7 @@ const referralSourceOptions = [
 
 type PatientForm = {
   name: string;
+  cedula: string;
   phone: string;
   email: string;
   age: string;
@@ -106,6 +107,7 @@ export default function Patients() {
   const openEdit = (p: any) => {
     setForm({
       name: p.name,
+      cedula: (p as { cedula?: string }).cedula ?? "",
       phone: p.phone,
       email: p.email ?? "",
       age: p.age?.toString() ?? "",
@@ -126,6 +128,7 @@ export default function Patients() {
   const handleSave = () => {
     const data = {
       name: form.name,
+      cedula: form.cedula || undefined,
       phone: form.phone,
       email: form.email || undefined,
       age: form.age ? parseInt(form.age) : undefined,
@@ -309,6 +312,15 @@ export default function Patients() {
             <div className="col-span-2 space-y-1">
               <Label>Nombre completo *</Label>
               <Input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} className="bg-background" placeholder="Ej: Juan Pérez" />
+            </div>
+            <div className="col-span-2 space-y-1">
+              <Label>Cédula (número de historia clínica)</Label>
+              <Input
+                value={form.cedula}
+                onChange={e => setForm(f => ({ ...f, cedula: e.target.value }))}
+                className="bg-background"
+                placeholder="Ej: 1234567890"
+              />
             </div>
             <div className="space-y-1">
               <Label>Teléfono / WhatsApp *</Label>

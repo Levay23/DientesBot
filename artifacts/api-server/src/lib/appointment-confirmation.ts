@@ -56,10 +56,14 @@ export function shouldAllowAIBooking(
   const assistantProposedTime =
     ctx.assistantOfferedSlots ?? assistantRecentlyOfferedSlots(recentHistory);
 
-  // IA devolvió bookAppointment y acaba de ofrecer cupos → confiar en la reserva estructurada
-  if (ctx.hasBookInResponse && assistantProposedTime) {
-    const pureInfo = INFO_ONLY.test(lower) && !TIME_HINT.test(lower) && !SLOT_SELECTION.test(lower) && !CONFIRMATION_PHRASES.test(lower);
+  // IA devolvió bookAppointment en JSON → permitir si el paciente eligió hora o confirmó (no solo preguntó precio)
+  if (ctx.hasBookInResponse) {
+    const pureInfo = INFO_ONLY.test(lower) && !TIME_HINT.test(lower) && !SLOT_SELECTION.test(lower)
+      && !CONFIRMATION_PHRASES.test(lower) && !EXPLICIT_BOOKING.test(lower);
     if (!pureInfo) {
+      return { allowed: true, reason: "reserva_estructurada_en_json" };
+    }
+    if (assistantProposedTime && (SLOT_SELECTION.test(lower) || CONFIRMATION_ONLY.test(msg) || CONFIRMATION_PHRASES.test(lower))) {
       return { allowed: true, reason: "reserva_estructurada_tras_oferta" };
     }
   }

@@ -29,6 +29,7 @@ router.get("/patients", async (req, res): Promise<void> => {
           ilike(patientsTable.referralSource as any, term),
           ilike(patientsTable.city as any, term),
           ilike(patientsTable.notes as any, term),
+          ilike(patientsTable.cedula as any, term),
         ),
       );
     }
@@ -74,7 +75,8 @@ router.post("/patients", async (req, res): Promise<void> => {
     res.status(400).json({ error: parsed.error.message });
     return;
   }
-  const [patient] = await db.insert(patientsTable).values(parsed.data).returning();
+  const cedula = typeof req.body.cedula === "string" ? req.body.cedula.trim() || null : null;
+  const [patient] = await db.insert(patientsTable).values({ ...parsed.data, cedula }).returning();
   res.status(201).json({ ...patient, nextAppointment: null });
 });
 
@@ -104,7 +106,11 @@ router.put("/patients/:id", async (req, res): Promise<void> => {
   if (!params.success) { res.status(400).json({ error: "Invalid id" }); return; }
   const parsed = UpdatePatientBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
-  const [patient] = await db.update(patientsTable).set(parsed.data).where(eq(patientsTable.id, params.data.id)).returning();
+  const cedula = typeof req.body.cedula === "string" ? req.body.cedula.trim() || null : undefined;
+  const [patient] = await db.update(patientsTable).set({
+    ...parsed.data,
+    ...(cedula !== undefined ? { cedula } : {}),
+  }).where(eq(patientsTable.id, params.data.id)).returning();
   if (!patient) { res.status(404).json({ error: "Patient not found" }); return; }
   res.json({ ...patient, nextAppointment: null });
 });

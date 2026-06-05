@@ -47,6 +47,7 @@ router.get("/clinical/quotations", async (req, res): Promise<void> => {
     items: quotationsTable.items,
     total: quotationsTable.total,
     status: quotationsTable.status,
+    observations: quotationsTable.observations,
     createdAt: quotationsTable.createdAt,
   }).from(quotationsTable)
     .innerJoin(patientsTable, eq(quotationsTable.patientId, patientsTable.id))
@@ -61,7 +62,8 @@ router.post("/clinical/quotations", async (req, res): Promise<void> => {
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
   
   const { sendToWhatsApp, ...data } = parsed.data;
-  const [quotation] = await db.insert(quotationsTable).values(data).returning();
+  const observations = typeof req.body.observations === "string" ? req.body.observations.trim() || null : null;
+  const [quotation] = await db.insert(quotationsTable).values({ ...data, observations }).returning();
   
   if (sendToWhatsApp && quotation) {
     try {
@@ -114,7 +116,11 @@ router.patch("/clinical/quotations/:id", async (req, res): Promise<void> => {
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
   
   const { sendToWhatsApp, ...data } = parsed.data as any;
-  const [quotation] = await db.update(quotationsTable).set(data).where(eq(quotationsTable.id, id)).returning();
+  const observations = typeof req.body.observations === "string" ? req.body.observations.trim() || null : undefined;
+  const [quotation] = await db.update(quotationsTable).set({
+    ...data,
+    ...(observations !== undefined ? { observations } : {}),
+  }).where(eq(quotationsTable.id, id)).returning();
   
   if (sendToWhatsApp && quotation) {
     try {
