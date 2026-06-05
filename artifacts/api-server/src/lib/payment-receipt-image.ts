@@ -94,7 +94,7 @@ export async function generatePaymentReceiptImage(data: PaymentReceiptData): Pro
 
   ctx.fillStyle = "#ffffff";
   ctx.font = "26pt StandardFont";
-  ctx.fillText("RECIBO DE ABONO", 160, 70);
+  ctx.fillText("RECIBO DE PAGO", 160, 70);
   ctx.font = "16pt StandardFont";
   ctx.fillStyle = "#94a3b8";
   ctx.fillText(data.clinicName.toUpperCase(), 160, 105);
