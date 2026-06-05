@@ -28,6 +28,8 @@ import {
   ChevronsUpDown,
   Banknote,
   X,
+  History,
+  User,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -78,6 +80,12 @@ function formatPriceCop(price: number) {
     currency: "COP",
     minimumFractionDigits: 0,
   }).format(price);
+}
+
+function formatPaymentDate(dateStr: string) {
+  const [y, m, d] = dateStr.split("-");
+  if (!y || !m || !d) return dateStr;
+  return `${d}/${m}/${y}`;
 }
 
 let lineIdSeq = 0;
@@ -174,6 +182,8 @@ function paidForTreatment(
 
 export default function Billing() {
   const [search, setSearch] = useState("");
+  const [selectedPatientId, setSelectedPatientId] = useState<number | null>(null);
+  const [listPatientOpen, setListPatientOpen] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [patientOpen, setPatientOpen] = useState(false);
   const [editing, setEditing] = useState<PaymentRow | null>(null);
@@ -198,6 +208,25 @@ export default function Billing() {
     patientIdNum,
     { query: { enabled: patientIdNum > 0 && dialogOpen } },
   );
+
+  const { data: selectedPatientBilling, isLoading: selectedPatientBillingLoading } =
+    useGetPatientBilling(selectedPatientId ?? 0, {
+      query: { enabled: (selectedPatientId ?? 0) > 0 },
+    });
+
+  const selectedPatient = useMemo(
+    () => patients?.find((p) => p.id === selectedPatientId) ?? null,
+    [patients, selectedPatientId],
+  );
+
+  const patientHistory = useMemo(() => {
+    const list = selectedPatientBilling?.payments ?? [];
+    return [...list].sort((a, b) => {
+      const dateCmp = b.paymentDate.localeCompare(a.paymentDate);
+      if (dateCmp !== 0) return dateCmp;
+      return b.id - a.id;
+    });
+  }, [selectedPatientBilling?.payments]);
 
   const createPayment = useCreatePayment();
   const updatePayment = useUpdatePayment();
@@ -283,6 +312,17 @@ export default function Billing() {
     setForm(emptyMetaForm());
     setLines([emptyCatalogLine()]);
     setDialogOpen(true);
+  };
+
+  const openCreateForPatient = (patientId: number) => {
+    setEditing(null);
+    setForm({ ...emptyMetaForm(), patientId: String(patientId) });
+    setLines([emptyCatalogLine()]);
+    setDialogOpen(true);
+  };
+
+  const openPatient = (patientId: number) => {
+    setSelectedPatientId(patientId);
   };
 
   const openEdit = (p: PaymentRow) => {
@@ -431,6 +471,7 @@ export default function Billing() {
       toast({
         title: toSave.length === 1 ? "Abono registrado" : `${toSave.length} abonos registrados`,
       });
+      setSelectedPatientId(patientId);
       setDialogOpen(false);
       invalidate(patientId);
     } catch {
@@ -440,14 +481,14 @@ export default function Billing() {
     }
   };
 
-  const handleDelete = (id: number) => {
+  const handleDelete = (id: number, patientId?: number) => {
     if (!confirm("¿Eliminar este registro de pago?")) return;
     deletePayment.mutate(
       { id },
       {
         onSuccess: () => {
           toast({ title: "Pago eliminado" });
-          invalidate();
+          invalidate(patientId ?? selectedPatientId ?? undefined);
         },
         onError: () => toast({ variant: "destructive", title: "No se pudo eliminar" }),
       },
@@ -528,15 +569,215 @@ export default function Billing() {
           </div>
         ) : null}
 
-        <div className="relative max-w-md">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder="Buscar por paciente, teléfono o concepto..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="pl-9 bg-background"
-          />
+        <div className="grid gap-4 lg:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label className="flex items-center gap-1.5">
+              <User className="h-3.5 w-3.5" />
+              Buscar paciente (historial y abonos)
+            </Label>
+            <Popover open={listPatientOpen} onOpenChange={setListPatientOpen}>
+              <PopoverTrigger asChild>
+                <Button
+                  variant="outline"
+                  role="combobox"
+                  className="w-full justify-between bg-background font-normal"
+                >
+                  {selectedPatient
+                    ? `${selectedPatient.name}${selectedPatient.phone ? ` · ${selectedPatient.phone}` : ""}`
+                    : "Buscar paciente por nombre o teléfono..."}
+                  <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
+                <Command>
+                  <CommandInput placeholder="Buscar paciente..." />
+                  <CommandList className="max-h-[280px] overflow-y-auto">
+                    <CommandEmpty>No se encontró el paciente.</CommandEmpty>
+                    <CommandGroup>
+                      {(patients ?? []).map((pt) => (
+                        <CommandItem
+                          key={pt.id}
+                          value={`${pt.name} ${pt.phone ?? ""}`}
+                          onSelect={() => {
+                            openPatient(pt.id);
+                            setListPatientOpen(false);
+                          }}
+                        >
+                          <Check
+                            className={cn(
+                              "mr-2 h-4 w-4",
+                              selectedPatientId === pt.id ? "opacity-100" : "opacity-0",
+                            )}
+                          />
+                          {pt.name} {pt.phone ? `· ${pt.phone}` : ""}
+                        </CommandItem>
+                      ))}
+                    </CommandGroup>
+                  </CommandList>
+                </Command>
+              </PopoverContent>
+            </Popover>
+          </div>
+          <div className="space-y-1.5">
+            <Label className="flex items-center gap-1.5">
+              <Search className="h-3.5 w-3.5" />
+              Buscar movimientos
+            </Label>
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Por paciente, teléfono o concepto..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="pl-9 bg-background"
+              />
+            </div>
+          </div>
         </div>
+
+        {selectedPatientId && (
+          <Card className="border-border/50 bg-card/80">
+            <CardHeader className="pb-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <CardTitle className="text-lg">
+                    {selectedPatient?.name ?? "Paciente"}
+                  </CardTitle>
+                  {selectedPatient?.phone && (
+                    <p className="text-sm text-muted-foreground mt-0.5">{selectedPatient.phone}</p>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setSelectedPatientId(null)}
+                  >
+                    Cerrar
+                  </Button>
+                  <Button size="sm" onClick={() => openCreateForPatient(selectedPatientId)}>
+                    <Plus className="h-4 w-4 mr-1" />
+                    Nuevo abono
+                  </Button>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {selectedPatientBillingLoading ? (
+                <Skeleton className="h-16 w-full" />
+              ) : selectedPatientBilling ? (
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
+                  <div className="rounded-lg border border-border/40 p-3 bg-muted/10">
+                    <p className="text-xs text-muted-foreground">Total abonado</p>
+                    <p className="font-semibold text-emerald-500">
+                      {formatPriceCop(selectedPatientBilling.totalPaid ?? 0)}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-border/40 p-3 bg-muted/10">
+                    <p className="text-xs text-muted-foreground">Deuda pendiente</p>
+                    <p className="font-semibold text-amber-500">
+                      {formatPriceCop(selectedPatientBilling.totalDebt ?? 0)}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-border/40 p-3 bg-muted/10 col-span-2 sm:col-span-1">
+                    <p className="text-xs text-muted-foreground">Abonos registrados</p>
+                    <p className="font-semibold">{patientHistory.length}</p>
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <History className="h-4 w-4 text-muted-foreground" />
+                  <h3 className="font-semibold text-sm">Historial de abonos</h3>
+                </div>
+                {selectedPatientBillingLoading ? (
+                  <div className="space-y-2">
+                    {[...Array(3)].map((_, i) => (
+                      <Skeleton key={i} className="h-12 w-full" />
+                    ))}
+                  </div>
+                ) : !patientHistory.length ? (
+                  <p className="text-sm text-muted-foreground py-6 text-center border border-dashed border-border/50 rounded-lg">
+                    Este paciente aún no tiene abonos. Usa &quot;Nuevo abono&quot; para registrar el primero.
+                  </p>
+                ) : (
+                  <div className="border border-border/40 rounded-lg overflow-hidden">
+                    <div className="hidden sm:grid sm:grid-cols-[110px_1fr_120px_100px_100px] gap-2 px-3 py-2 bg-muted/30 text-[10px] uppercase tracking-wide text-muted-foreground font-medium">
+                      <span>Fecha abono</span>
+                      <span>Tratamiento / concepto</span>
+                      <span className="text-right">Monto</span>
+                      <span>Tipo</span>
+                      <span>Método</span>
+                    </div>
+                    <div className="divide-y divide-border/30 max-h-[360px] overflow-y-auto">
+                      {patientHistory.map((p) => (
+                        <div
+                          key={p.id}
+                          className="grid grid-cols-1 sm:grid-cols-[110px_1fr_120px_100px_100px] gap-2 px-3 py-3 text-sm hover:bg-muted/10"
+                        >
+                          <div className="flex sm:block items-center gap-2">
+                            <span className="text-[10px] uppercase text-muted-foreground sm:hidden">
+                              Fecha
+                            </span>
+                            <span className="font-medium flex items-center gap-1">
+                              <Calendar className="h-3.5 w-3.5 text-muted-foreground sm:hidden" />
+                              {formatPaymentDate(p.paymentDate)}
+                            </span>
+                          </div>
+                          <div>
+                            <span className="text-[10px] uppercase text-muted-foreground sm:hidden">
+                              Tratamiento
+                            </span>
+                            <p className="font-medium">{p.treatmentName || p.concept || "Sin concepto"}</p>
+                            {p.quotationId != null && (
+                              <p className="text-xs text-muted-foreground">Presupuesto #{p.quotationId}</p>
+                            )}
+                            {p.expectedTotal != null && p.expectedTotal > 0 && (
+                              <p className="text-xs text-muted-foreground">
+                                Total tratamiento: {formatPriceCop(p.expectedTotal)}
+                              </p>
+                            )}
+                          </div>
+                          <div className="sm:text-right">
+                            <span className="text-[10px] uppercase text-muted-foreground sm:hidden">
+                              Monto
+                            </span>
+                            <p
+                              className={cn(
+                                "font-bold tabular-nums",
+                                p.paymentType === "devolucion" ? "text-red-400" : "text-emerald-400",
+                              )}
+                            >
+                              {p.paymentType === "devolucion" ? "−" : "+"}
+                              {formatPriceCop(p.amount)}
+                            </p>
+                          </div>
+                          <div>
+                            <span className="text-[10px] uppercase text-muted-foreground sm:hidden">
+                              Tipo
+                            </span>
+                            <Badge variant="outline" className="text-xs">
+                              {TYPE_LABELS[p.paymentType] ?? p.paymentType}
+                            </Badge>
+                          </div>
+                          <div>
+                            <span className="text-[10px] uppercase text-muted-foreground sm:hidden">
+                              Método
+                            </span>
+                            <p className="text-muted-foreground text-xs">
+                              {METHOD_LABELS[p.paymentMethod] ?? p.paymentMethod}
+                            </p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {isLoading ? (
           <div className="space-y-3">
@@ -557,7 +798,13 @@ export default function Billing() {
                 <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2 mb-1">
-                      <p className="font-semibold text-foreground">{p.patientName}</p>
+                      <button
+                        type="button"
+                        onClick={() => openPatient(p.patientId)}
+                        className="font-semibold text-foreground hover:text-primary hover:underline text-left"
+                      >
+                        {p.patientName}
+                      </button>
                       <Badge variant="outline">{TYPE_LABELS[p.paymentType] ?? p.paymentType}</Badge>
                       <Badge variant="secondary">{METHOD_LABELS[p.paymentMethod] ?? p.paymentMethod}</Badge>
                     </div>
@@ -604,7 +851,7 @@ export default function Billing() {
                       variant="ghost"
                       size="icon"
                       className="text-destructive"
-                      onClick={() => handleDelete(p.id)}
+                      onClick={() => handleDelete(p.id, p.patientId)}
                     >
                       <Trash2 className="h-4 w-4" />
                     </Button>
@@ -1017,6 +1264,43 @@ export default function Billing() {
                 rows={2}
               />
             </div>
+
+            {form.patientId && !editing && patientBilling?.payments?.length ? (
+              <div className="space-y-2 pt-2 border-t border-border/40">
+                <div className="flex items-center gap-2">
+                  <History className="h-4 w-4 text-muted-foreground" />
+                  <Label className="text-sm font-semibold">Historial de abonos anteriores</Label>
+                </div>
+                <div className="border border-border/40 rounded-lg divide-y divide-border/30 max-h-[200px] overflow-y-auto">
+                  {[...patientBilling.payments]
+                    .sort((a, b) => b.paymentDate.localeCompare(a.paymentDate) || b.id - a.id)
+                    .map((p) => (
+                      <div
+                        key={p.id}
+                        className="flex items-center justify-between gap-3 px-3 py-2 text-sm"
+                      >
+                        <div className="min-w-0">
+                          <p className="font-medium truncate">
+                            {p.treatmentName || p.concept || "Sin concepto"}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            {formatPaymentDate(p.paymentDate)} · {TYPE_LABELS[p.paymentType] ?? p.paymentType}
+                          </p>
+                        </div>
+                        <p
+                          className={cn(
+                            "font-semibold shrink-0 tabular-nums",
+                            p.paymentType === "devolucion" ? "text-red-400" : "text-emerald-400",
+                          )}
+                        >
+                          {p.paymentType === "devolucion" ? "−" : "+"}
+                          {formatPriceCop(p.amount)}
+                        </p>
+                      </div>
+                    ))}
+                </div>
+              </div>
+            ) : null}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDialogOpen(false)}>
