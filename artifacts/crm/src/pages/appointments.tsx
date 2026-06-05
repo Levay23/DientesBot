@@ -415,14 +415,22 @@ export default function Appointments() {
             </div>
             <div className="space-y-1">
               <Label>Hora</Label>
-              <Input type="time" value={form.startTime} onChange={e => setForm(f => ({ ...f, startTime: e.target.value }))} className="bg-background" />
+              <Input
+                type="time"
+                step={900}
+                value={form.startTime}
+                onChange={e => setForm(f => ({ ...f, startTime: e.target.value }))}
+                className="bg-background"
+              />
             </div>
             <div className="space-y-1">
               <Label>Duración</Label>
               <Select value={form.duration} onValueChange={v => setForm(f => ({ ...f, duration: v }))}>
                 <SelectTrigger className="bg-background"><SelectValue /></SelectTrigger>
                 <SelectContent>
+                  <SelectItem value="15">15 minutos</SelectItem>
                   <SelectItem value="30">30 minutos</SelectItem>
+                  <SelectItem value="45">45 minutos</SelectItem>
                   <SelectItem value="60">1 hora</SelectItem>
                   <SelectItem value="90">1.5 horas</SelectItem>
                   <SelectItem value="120">2 horas</SelectItem>

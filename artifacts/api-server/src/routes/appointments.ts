@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import { db, appointmentsTable, patientsTable, settingsTable } from "@workspace/db";
 import { eq, and, sql } from "drizzle-orm";
 import { runAppointmentConfirmedAutomations } from "../lib/automations-engine";
+import { addMinutes, APPOINTMENT_SLOT_INTERVAL_MINUTES } from "../lib/appointment-time";
 import {
   CreateAppointmentBody,
   UpdateAppointmentBody,
@@ -70,12 +71,6 @@ async function syncPatientStatus(patientId: number): Promise<void> {
 }
 
 
-function addMinutes(time: string, minutes: number): string {
-  const [h, m] = time.split(":").map(Number);
-  const total = h * 60 + m + minutes;
-  return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
-}
-
 router.get("/appointments/available-slots", async (req, res): Promise<void> => {
   // Parse date as string directly (query params are always strings; zod.date() would reject them)
   const dateStr = typeof req.query.date === "string" ? req.query.date : "";
@@ -98,7 +93,7 @@ router.get("/appointments/available-slots", async (req, res): Promise<void> => {
     if (next > endHour) break;
     const conflict = existing.some(a => !(a.endTime <= current || a.startTime >= next));
     slots.push({ startTime: current, endTime: next, available: !conflict });
-    current = next;
+    current = addMinutes(current, APPOINTMENT_SLOT_INTERVAL_MINUTES);
   }
   res.json(slots);
 });

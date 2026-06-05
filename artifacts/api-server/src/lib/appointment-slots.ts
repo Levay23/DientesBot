@@ -1,12 +1,7 @@
 import { db, settingsTable, appointmentsTable } from "@workspace/db";
 import { eq, and, sql } from "drizzle-orm";
 import { logger } from "./logger";
-
-function addMinutes(time: string, minutes: number): string {
-  const [h, m] = time.split(":").map(Number);
-  const total = h * 60 + m + minutes;
-  return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
-}
+import { addMinutes, APPOINTMENT_SLOT_INTERVAL_MINUTES } from "./appointment-time";
 
 function getColombiaDate(offsetDays = 0): string {
   const now = new Date();
@@ -69,7 +64,7 @@ export async function getAvailableSlots(): Promise<AvailableSlotDay[]> {
         const conflict = existing.some(a => !(a.endTime <= current || a.startTime >= next));
         const isPast = offset === 0 && current <= currentTime;
         if (!conflict && !isPast) slots.push(current);
-        current = next;
+        current = addMinutes(current, APPOINTMENT_SLOT_INTERVAL_MINUTES);
       }
 
       const labelDay = offset === 0 ? "Hoy" : offset === 1 ? "Mañana" : dayNames[weekday] ?? dateStr;

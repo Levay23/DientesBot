@@ -304,11 +304,12 @@ export default function Patients() {
       </div>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="bg-card border-border">
-          <DialogHeader>
+        <DialogContent className="bg-card border-border max-w-2xl max-h-[90vh] flex flex-col gap-0 p-0 overflow-hidden">
+          <DialogHeader className="px-6 pt-6 pb-2 shrink-0">
             <DialogTitle>{editingId ? "Editar Paciente" : "Nuevo Paciente"}</DialogTitle>
           </DialogHeader>
-          <div className="grid grid-cols-2 gap-4 py-2">
+          <div className="overflow-y-auto px-6 py-2 flex-1 min-h-0">
+          <div className="grid grid-cols-2 gap-4">
             <div className="col-span-2 space-y-1">
               <Label>Nombre completo *</Label>
               <Input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} className="bg-background" placeholder="Ej: Juan Pérez" />
@@ -413,8 +414,9 @@ export default function Patients() {
               </div>
             </div>
           </div>
+          </div>
 
-          <DialogFooter>
+          <DialogFooter className="px-6 py-4 shrink-0 border-t border-border/50 bg-card">
             <Button variant="outline" onClick={() => setDialogOpen(false)}>Cancelar</Button>
             <Button onClick={handleSave} disabled={createPatient.isPending || updatePatient.isPending} className="bg-primary">
               {editingId ? "Guardar cambios" : "Crear paciente"}
