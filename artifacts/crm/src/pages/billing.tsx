@@ -14,7 +14,7 @@ import {
   getGetBillingSummaryQueryKey,
   getGetPatientBillingQueryKey,
 } from "@workspace/api-client-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   Plus,
@@ -185,6 +185,7 @@ function paidForTreatment(
 export default function Billing() {
   const [search, setSearch] = useState("");
   const [selectedPatientId, setSelectedPatientId] = useState<number | null>(null);
+  const [anchorPaymentId, setAnchorPaymentId] = useState<number | null>(null);
   const [listPatientOpen, setListPatientOpen] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [patientOpen, setPatientOpen] = useState(false);
@@ -325,8 +326,19 @@ export default function Billing() {
     setDialogOpen(true);
   };
 
-  const openPatient = (patientId: number) => {
+  const closePatient = () => {
+    setSelectedPatientId(null);
+    setAnchorPaymentId(null);
+  };
+
+  const openPatient = (patientId: number, paymentId?: number) => {
+    const anchor = paymentId ?? null;
+    if (selectedPatientId === patientId && anchorPaymentId === anchor) {
+      closePatient();
+      return;
+    }
     setSelectedPatientId(patientId);
+    setAnchorPaymentId(anchor);
   };
 
   const openEdit = (p: PaymentRow) => {
@@ -528,6 +540,150 @@ export default function Billing() {
 
   const showQuotationLines = !!form.quotationId && !editing;
 
+  const patientHistoryPanel = selectedPatientId ? (
+    <Card className="border-border/50 bg-card/80 border-primary/30">
+      <CardHeader className="pb-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <CardTitle className="text-lg">{selectedPatient?.name ?? "Paciente"}</CardTitle>
+            {selectedPatient?.phone && (
+              <p className="text-sm text-muted-foreground mt-0.5">{selectedPatient.phone}</p>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={closePatient}>
+              Cerrar
+            </Button>
+            <Button size="sm" onClick={() => openCreateForPatient(selectedPatientId)}>
+              <Plus className="h-4 w-4 mr-1" />
+              Nuevo abono
+            </Button>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {selectedPatientBillingLoading ? (
+          <Skeleton className="h-16 w-full" />
+        ) : selectedPatientBilling ? (
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
+            <div className="rounded-lg border border-border/40 p-3 bg-muted/10">
+              <p className="text-xs text-muted-foreground">Total abonado</p>
+              <p className="font-semibold text-emerald-500">
+                {formatPriceCop(selectedPatientBilling.totalPaid ?? 0)}
+              </p>
+            </div>
+            <div className="rounded-lg border border-border/40 p-3 bg-muted/10">
+              <p className="text-xs text-muted-foreground">Deuda pendiente</p>
+              <p className="font-semibold text-amber-500">
+                {formatPriceCop(selectedPatientBilling.totalDebt ?? 0)}
+              </p>
+            </div>
+            <div className="rounded-lg border border-border/40 p-3 bg-muted/10 col-span-2 sm:col-span-1">
+              <p className="text-xs text-muted-foreground">Abonos registrados</p>
+              <p className="font-semibold">{patientHistory.length}</p>
+            </div>
+          </div>
+        ) : null}
+
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <History className="h-4 w-4 text-muted-foreground" />
+            <h3 className="font-semibold text-sm">Historial de abonos</h3>
+          </div>
+          {selectedPatientBillingLoading ? (
+            <div className="space-y-2">
+              {[...Array(3)].map((_, i) => (
+                <Skeleton key={i} className="h-12 w-full" />
+              ))}
+            </div>
+          ) : !patientHistory.length ? (
+            <p className="text-sm text-muted-foreground py-6 text-center border border-dashed border-border/50 rounded-lg">
+              Este paciente aún no tiene abonos. Usa &quot;Nuevo abono&quot; para registrar el primero.
+            </p>
+          ) : (
+            <div className="border border-border/40 rounded-lg overflow-hidden">
+              <div className="hidden sm:grid sm:grid-cols-[110px_1fr_120px_100px_100px_150px] gap-2 px-3 py-2 bg-muted/30 text-[10px] uppercase tracking-wide text-muted-foreground font-medium">
+                <span>Fecha abono</span>
+                <span>Tratamiento / concepto</span>
+                <span className="text-right">Monto</span>
+                <span>Tipo</span>
+                <span>Método</span>
+                <span className="text-center">Recibo</span>
+              </div>
+              <div className="divide-y divide-border/30 max-h-[360px] overflow-y-auto">
+                {patientHistory.map((p) => (
+                  <div
+                    key={p.id}
+                    className="grid grid-cols-1 sm:grid-cols-[110px_1fr_120px_100px_100px_150px] gap-2 px-3 py-3 text-sm hover:bg-muted/10"
+                  >
+                    <div className="flex sm:block items-center gap-2">
+                      <span className="text-[10px] uppercase text-muted-foreground sm:hidden">Fecha</span>
+                      <span className="font-medium flex items-center gap-1">
+                        <Calendar className="h-3.5 w-3.5 text-muted-foreground sm:hidden" />
+                        {formatPaymentDate(p.paymentDate)}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] uppercase text-muted-foreground sm:hidden">
+                        Tratamiento
+                      </span>
+                      <p className="font-medium">{p.treatmentName || p.concept || "Sin concepto"}</p>
+                      {p.quotationId != null && (
+                        <p className="text-xs text-muted-foreground">Presupuesto #{p.quotationId}</p>
+                      )}
+                      {p.expectedTotal != null && p.expectedTotal > 0 && (
+                        <p className="text-xs text-muted-foreground">
+                          Total tratamiento: {formatPriceCop(p.expectedTotal)}
+                        </p>
+                      )}
+                    </div>
+                    <div className="sm:text-right">
+                      <span className="text-[10px] uppercase text-muted-foreground sm:hidden">Monto</span>
+                      <p
+                        className={cn(
+                          "font-bold tabular-nums",
+                          p.paymentType === "devolucion" ? "text-red-400" : "text-emerald-400",
+                        )}
+                      >
+                        {p.paymentType === "devolucion" ? "−" : "+"}
+                        {formatPriceCop(p.amount)}
+                      </p>
+                    </div>
+                    <div>
+                      <span className="text-[10px] uppercase text-muted-foreground sm:hidden">Tipo</span>
+                      <Badge variant="outline" className="text-xs">
+                        {TYPE_LABELS[p.paymentType] ?? p.paymentType}
+                      </Badge>
+                    </div>
+                    <div>
+                      <span className="text-[10px] uppercase text-muted-foreground sm:hidden">Método</span>
+                      <p className="text-muted-foreground text-xs">
+                        {METHOD_LABELS[p.paymentMethod] ?? p.paymentMethod}
+                      </p>
+                    </div>
+                    <div className="flex sm:justify-center items-center">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-8 text-xs gap-1.5 text-emerald-600 border-emerald-600/30 hover:bg-emerald-500/10"
+                        disabled={sendingReceiptId === p.id || sendPaymentReceipt.isPending}
+                        onClick={() => handleSendReceipt(p.id, selectedPatient?.phone)}
+                      >
+                        <Send className="h-3.5 w-3.5" />
+                        {sendingReceiptId === p.id ? "Enviando..." : "Enviar por WhatsApp"}
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  ) : null;
+
   return (
     <Layout>
       <div className="space-y-6">
@@ -666,163 +822,7 @@ export default function Billing() {
           </div>
         </div>
 
-        {selectedPatientId && (
-          <Card className="border-border/50 bg-card/80">
-            <CardHeader className="pb-3">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div>
-                  <CardTitle className="text-lg">
-                    {selectedPatient?.name ?? "Paciente"}
-                  </CardTitle>
-                  {selectedPatient?.phone && (
-                    <p className="text-sm text-muted-foreground mt-0.5">{selectedPatient.phone}</p>
-                  )}
-                </div>
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setSelectedPatientId(null)}
-                  >
-                    Cerrar
-                  </Button>
-                  <Button size="sm" onClick={() => openCreateForPatient(selectedPatientId)}>
-                    <Plus className="h-4 w-4 mr-1" />
-                    Nuevo abono
-                  </Button>
-                </div>
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {selectedPatientBillingLoading ? (
-                <Skeleton className="h-16 w-full" />
-              ) : selectedPatientBilling ? (
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
-                  <div className="rounded-lg border border-border/40 p-3 bg-muted/10">
-                    <p className="text-xs text-muted-foreground">Total abonado</p>
-                    <p className="font-semibold text-emerald-500">
-                      {formatPriceCop(selectedPatientBilling.totalPaid ?? 0)}
-                    </p>
-                  </div>
-                  <div className="rounded-lg border border-border/40 p-3 bg-muted/10">
-                    <p className="text-xs text-muted-foreground">Deuda pendiente</p>
-                    <p className="font-semibold text-amber-500">
-                      {formatPriceCop(selectedPatientBilling.totalDebt ?? 0)}
-                    </p>
-                  </div>
-                  <div className="rounded-lg border border-border/40 p-3 bg-muted/10 col-span-2 sm:col-span-1">
-                    <p className="text-xs text-muted-foreground">Abonos registrados</p>
-                    <p className="font-semibold">{patientHistory.length}</p>
-                  </div>
-                </div>
-              ) : null}
-
-              <div className="space-y-2">
-                <div className="flex items-center gap-2">
-                  <History className="h-4 w-4 text-muted-foreground" />
-                  <h3 className="font-semibold text-sm">Historial de abonos</h3>
-                </div>
-                {selectedPatientBillingLoading ? (
-                  <div className="space-y-2">
-                    {[...Array(3)].map((_, i) => (
-                      <Skeleton key={i} className="h-12 w-full" />
-                    ))}
-                  </div>
-                ) : !patientHistory.length ? (
-                  <p className="text-sm text-muted-foreground py-6 text-center border border-dashed border-border/50 rounded-lg">
-                    Este paciente aún no tiene abonos. Usa &quot;Nuevo abono&quot; para registrar el primero.
-                  </p>
-                ) : (
-                  <div className="border border-border/40 rounded-lg overflow-hidden">
-                    <div className="hidden sm:grid sm:grid-cols-[110px_1fr_120px_100px_100px_150px] gap-2 px-3 py-2 bg-muted/30 text-[10px] uppercase tracking-wide text-muted-foreground font-medium">
-                      <span>Fecha abono</span>
-                      <span>Tratamiento / concepto</span>
-                      <span className="text-right">Monto</span>
-                      <span>Tipo</span>
-                      <span>Método</span>
-                      <span className="text-center">Recibo</span>
-                    </div>
-                    <div className="divide-y divide-border/30 max-h-[360px] overflow-y-auto">
-                      {patientHistory.map((p) => (
-                        <div
-                          key={p.id}
-                          className="grid grid-cols-1 sm:grid-cols-[110px_1fr_120px_100px_100px_150px] gap-2 px-3 py-3 text-sm hover:bg-muted/10"
-                        >
-                          <div className="flex sm:block items-center gap-2">
-                            <span className="text-[10px] uppercase text-muted-foreground sm:hidden">
-                              Fecha
-                            </span>
-                            <span className="font-medium flex items-center gap-1">
-                              <Calendar className="h-3.5 w-3.5 text-muted-foreground sm:hidden" />
-                              {formatPaymentDate(p.paymentDate)}
-                            </span>
-                          </div>
-                          <div>
-                            <span className="text-[10px] uppercase text-muted-foreground sm:hidden">
-                              Tratamiento
-                            </span>
-                            <p className="font-medium">{p.treatmentName || p.concept || "Sin concepto"}</p>
-                            {p.quotationId != null && (
-                              <p className="text-xs text-muted-foreground">Presupuesto #{p.quotationId}</p>
-                            )}
-                            {p.expectedTotal != null && p.expectedTotal > 0 && (
-                              <p className="text-xs text-muted-foreground">
-                                Total tratamiento: {formatPriceCop(p.expectedTotal)}
-                              </p>
-                            )}
-                          </div>
-                          <div className="sm:text-right">
-                            <span className="text-[10px] uppercase text-muted-foreground sm:hidden">
-                              Monto
-                            </span>
-                            <p
-                              className={cn(
-                                "font-bold tabular-nums",
-                                p.paymentType === "devolucion" ? "text-red-400" : "text-emerald-400",
-                              )}
-                            >
-                              {p.paymentType === "devolucion" ? "−" : "+"}
-                              {formatPriceCop(p.amount)}
-                            </p>
-                          </div>
-                          <div>
-                            <span className="text-[10px] uppercase text-muted-foreground sm:hidden">
-                              Tipo
-                            </span>
-                            <Badge variant="outline" className="text-xs">
-                              {TYPE_LABELS[p.paymentType] ?? p.paymentType}
-                            </Badge>
-                          </div>
-                          <div>
-                            <span className="text-[10px] uppercase text-muted-foreground sm:hidden">
-                              Método
-                            </span>
-                            <p className="text-muted-foreground text-xs">
-                              {METHOD_LABELS[p.paymentMethod] ?? p.paymentMethod}
-                            </p>
-                          </div>
-                          <div className="flex sm:justify-center items-center">
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              className="h-8 text-xs gap-1.5 text-emerald-600 border-emerald-600/30 hover:bg-emerald-500/10"
-                              disabled={sendingReceiptId === p.id || sendPaymentReceipt.isPending}
-                              onClick={() => handleSendReceipt(p.id, selectedPatient?.phone)}
-                            >
-                              <Send className="h-3.5 w-3.5" />
-                              {sendingReceiptId === p.id ? "Enviando..." : "Enviar por WhatsApp"}
-                            </Button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-        )}
+        {selectedPatientId && anchorPaymentId === null ? patientHistoryPanel : null}
 
         {isLoading ? (
           <div className="space-y-3">
@@ -839,14 +839,25 @@ export default function Billing() {
         ) : (
           <div className="space-y-2">
             {(payments as PaymentRow[]).map((p) => (
-              <Card key={p.id} className="border-border/50 bg-card/80">
+              <Fragment key={p.id}>
+              <Card
+                className={cn(
+                  "border-border/50 bg-card/80",
+                  selectedPatientId === p.patientId && anchorPaymentId === p.id && "ring-1 ring-primary/40",
+                )}
+              >
                 <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2 mb-1">
                       <button
                         type="button"
-                        onClick={() => openPatient(p.patientId)}
-                        className="font-semibold text-foreground hover:text-primary hover:underline text-left"
+                        onClick={() => openPatient(p.patientId, p.id)}
+                        className={cn(
+                          "font-semibold text-left hover:text-primary hover:underline",
+                          selectedPatientId === p.patientId && anchorPaymentId === p.id
+                            ? "text-primary"
+                            : "text-foreground",
+                        )}
                       >
                         {p.patientName}
                       </button>
@@ -889,17 +900,6 @@ export default function Billing() {
                       {p.paymentType === "devolucion" ? "−" : "+"}
                       {formatPriceCop(p.amount)}
                     </p>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-8 text-xs gap-1 text-emerald-600 border-emerald-600/30"
-                      disabled={sendingReceiptId === p.id || sendPaymentReceipt.isPending}
-                      onClick={() => handleSendReceipt(p.id, p.patientPhone)}
-                      title="Enviar recibo por WhatsApp"
-                    >
-                      <Send className="h-3.5 w-3.5" />
-                      WhatsApp
-                    </Button>
                     <Button variant="ghost" size="icon" onClick={() => openEdit(p)}>
                       <Pencil className="h-4 w-4" />
                     </Button>
@@ -914,6 +914,8 @@ export default function Billing() {
                   </div>
                 </CardContent>
               </Card>
+              {selectedPatientId === p.patientId && anchorPaymentId === p.id ? patientHistoryPanel : null}
+              </Fragment>
             ))}
           </div>
         )}
