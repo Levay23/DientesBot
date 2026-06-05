@@ -59,6 +59,7 @@ import type {
   ReceiveIncomingConversationBody,
   ReconnectWhatsapp200,
   SendMessageBody,
+  SendPaymentReceiptWhatsapp200,
   SendWhatsappMessage200,
   SendWhatsappMessageBody,
   SetConversationModeBody,
@@ -4788,6 +4789,93 @@ export const useDeletePayment = <
   TContext
 > => {
   return useMutation(getDeletePaymentMutationOptions(options));
+};
+
+/**
+ * @summary Send payment receipt image via WhatsApp
+ */
+export const getSendPaymentReceiptWhatsappUrl = (id: number) => {
+  return `/api/billing/payments/${id}/send-whatsapp`;
+};
+
+export const sendPaymentReceiptWhatsapp = async (
+  id: number,
+  options?: RequestInit,
+): Promise<SendPaymentReceiptWhatsapp200> => {
+  return customFetch<SendPaymentReceiptWhatsapp200>(
+    getSendPaymentReceiptWhatsappUrl(id),
+    {
+      ...options,
+      method: "POST",
+    },
+  );
+};
+
+export const getSendPaymentReceiptWhatsappMutationOptions = <
+  TError = ErrorType<void>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof sendPaymentReceiptWhatsapp>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof sendPaymentReceiptWhatsapp>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  const mutationKey = ["sendPaymentReceiptWhatsapp"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof sendPaymentReceiptWhatsapp>>,
+    { id: number }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return sendPaymentReceiptWhatsapp(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type SendPaymentReceiptWhatsappMutationResult = NonNullable<
+  Awaited<ReturnType<typeof sendPaymentReceiptWhatsapp>>
+>;
+
+export type SendPaymentReceiptWhatsappMutationError = ErrorType<void>;
+
+/**
+ * @summary Send payment receipt image via WhatsApp
+ */
+export const useSendPaymentReceiptWhatsapp = <
+  TError = ErrorType<void>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof sendPaymentReceiptWhatsapp>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof sendPaymentReceiptWhatsapp>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  return useMutation(getSendPaymentReceiptWhatsappMutationOptions(options));
 };
 
 /**

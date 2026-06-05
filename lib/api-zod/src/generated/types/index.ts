@@ -65,6 +65,7 @@ export * from "./receiveIncomingConversation201";
 export * from "./receiveIncomingConversationBody";
 export * from "./reconnectWhatsapp200";
 export * from "./sendMessageBody";
+export * from "./sendPaymentReceiptWhatsapp200";
 export * from "./sendWhatsappMessage200";
 export * from "./sendWhatsappMessageBody";
 export * from "./setConversationModeBody";

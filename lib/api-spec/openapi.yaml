@@ -1140,6 +1140,29 @@ paths:
               schema:
                 $ref: "#/components/schemas/MessageResponse"
 
+  /billing/payments/{id}/send-whatsapp:
+    post:
+      operationId: sendPaymentReceiptWhatsapp
+      tags: [billing]
+      summary: Send payment receipt image via WhatsApp
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Receipt sent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SendPaymentReceiptWhatsapp200"
+        "400":
+          description: Invalid request
+        "503":
+          description: WhatsApp not connected
+
   /billing/patient/{patientId}:
     get:
       operationId: getPatientBilling
@@ -1309,6 +1332,15 @@ components:
         message:
           type: string
       required: [message]
+
+    SendPaymentReceiptWhatsapp200:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        sent:
+          type: boolean
+      required: [ok, sent]
 
     LoginBody:
       type: object

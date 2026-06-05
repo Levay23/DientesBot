@@ -1,8 +1,11 @@
 import { Router, type IRouter } from "express";
-import { db, paymentsTable, patientsTable, quotationsTable } from "@workspace/db";
+import { db, paymentsTable, patientsTable, quotationsTable, settingsTable } from "@workspace/db";
 import { eq, desc, and, gte, lte, ilike, or, sql, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { signedPaymentAmount, computeBalance } from "../lib/billing-utils";
+import { getWhatsAppSock, getWAState, phoneToJid } from "../lib/whatsapp";
+import { generatePaymentReceiptImage } from "../lib/payment-receipt-image";
+import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
 
@@ -32,6 +35,23 @@ const createPaymentSchema = z.object({
 });
 
 const updatePaymentSchema = createPaymentSchema.partial().omit({ patientId: true });
+
+const PAYMENT_METHOD_LABELS: Record<string, string> = {
+  efectivo: "Efectivo",
+  transferencia: "Transferencia",
+  tarjeta_debito: "Tarjeta débito",
+  tarjeta_credito: "Tarjeta crédito",
+  nequi: "Nequi",
+  daviplata: "Daviplata",
+  otro: "Otro",
+};
+
+const PAYMENT_TYPE_LABELS: Record<string, string> = {
+  abono: "Abono",
+  pago_completo: "Pago completo",
+  anticipo: "Anticipo",
+  devolucion: "Devolución",
+};
 
 function colombiaToday(): string {
   return new Intl.DateTimeFormat("en-CA", {
@@ -352,6 +372,110 @@ router.patch("/billing/payments/:id", async (req, res): Promise<void> => {
     .returning();
 
   res.json(updated);
+});
+
+router.post("/billing/payments/:id/send-whatsapp", async (req, res): Promise<void> => {
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) {
+    res.status(400).json({ error: "ID inválido" });
+    return;
+  }
+
+  const [payment] = await db.select().from(paymentsTable).where(eq(paymentsTable.id, id)).limit(1);
+  if (!payment) {
+    res.status(404).json({ error: "Pago no encontrado" });
+    return;
+  }
+
+  const [patient] = await db
+    .select()
+    .from(patientsTable)
+    .where(eq(patientsTable.id, payment.patientId))
+    .limit(1);
+  if (!patient?.phone?.trim()) {
+    res.status(400).json({ error: "El paciente no tiene teléfono registrado para WhatsApp" });
+    return;
+  }
+
+  const waState = getWAState();
+  const sock = getWhatsAppSock();
+  if (!sock || !waState.connected) {
+    res.status(503).json({ error: "WhatsApp no está conectado. Conéctalo en la sección WhatsApp." });
+    return;
+  }
+
+  const [settings] = await db.select().from(settingsTable).limit(1);
+  const clinicName = settings?.clinicName ?? "Dientes Fijos Medellín";
+  const clinicAddress = settings?.clinicAddress ?? null;
+
+  let quotationTotal: number | null = null;
+  let quotationPaid: number | null = null;
+  let quotationBalance: number | null = null;
+  if (payment.quotationId) {
+    const [quote] = await db
+      .select()
+      .from(quotationsTable)
+      .where(eq(quotationsTable.id, payment.quotationId))
+      .limit(1);
+    if (quote) {
+      quotationTotal = quote.total;
+      const paidMap = await getPaidByQuotation([payment.quotationId]);
+      quotationPaid = paidMap.get(payment.quotationId) ?? 0;
+      quotationBalance = computeBalance(quote.total, quotationPaid);
+    }
+  }
+
+  let treatmentPaid: number | null = null;
+  let treatmentBalance: number | null = null;
+  if (payment.expectedTotal != null && payment.expectedTotal > 0) {
+    const patientPayments = await db
+      .select()
+      .from(paymentsTable)
+      .where(eq(paymentsTable.patientId, payment.patientId));
+    const key = payment.treatmentName?.toLowerCase() ?? "";
+    treatmentPaid = 0;
+    for (const p of patientPayments) {
+      if (key && p.treatmentName?.toLowerCase() !== key) continue;
+      if (payment.quotationId != null) {
+        if (p.quotationId !== payment.quotationId) continue;
+      } else if (p.quotationId != null) {
+        continue;
+      }
+      treatmentPaid += signedPaymentAmount(p.amount, p.paymentType);
+    }
+    treatmentBalance = Math.max(0, payment.expectedTotal - treatmentPaid);
+  }
+
+  try {
+    const imageBuffer = await generatePaymentReceiptImage({
+      clinicName,
+      clinicAddress,
+      patientName: patient.name,
+      paymentDate: payment.paymentDate,
+      treatmentName: payment.treatmentName,
+      concept: payment.concept,
+      amount: payment.amount,
+      paymentMethod: PAYMENT_METHOD_LABELS[payment.paymentMethod] ?? payment.paymentMethod,
+      paymentType: PAYMENT_TYPE_LABELS[payment.paymentType] ?? payment.paymentType,
+      quotationId: payment.quotationId,
+      quotationTotal,
+      quotationPaid,
+      quotationBalance,
+      expectedTotal: payment.expectedTotal,
+      treatmentPaid,
+      treatmentBalance,
+    });
+
+    const jid = phoneToJid(patient.phone);
+    const caption = `*🧾 RECIBO DE ABONO - ${clinicName}*\n\nHola *${patient.name}*, confirmamos tu abono del *${payment.paymentDate.split("-").reverse().join("/")}*. Adjuntamos tu comprobante de pago.\n\n¡Gracias por confiar en nosotros!`;
+
+    await sock.sendMessage(jid, { image: imageBuffer, caption });
+    logger.info({ paymentId: id, jid, patientId: patient.id }, "Recibo de abono enviado por WhatsApp");
+    res.json({ ok: true, sent: true });
+  } catch (err) {
+    logger.error({ err, paymentId: id }, "Error enviando recibo de pago por WhatsApp");
+    res.status(500).json({ error: "No se pudo enviar el recibo por WhatsApp" });
+  }
 });
 
 router.delete("/billing/payments/:id", async (req, res): Promise<void> => {

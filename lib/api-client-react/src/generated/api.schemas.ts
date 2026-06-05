@@ -35,6 +35,11 @@ export interface MessageResponse {
   message: string;
 }
 
+export interface SendPaymentReceiptWhatsapp200 {
+  ok: boolean;
+  sent: boolean;
+}
+
 export interface LoginBody {
   email: string;
   password: string;

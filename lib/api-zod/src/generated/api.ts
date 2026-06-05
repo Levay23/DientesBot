@@ -1071,6 +1071,18 @@ export const DeletePaymentResponse = zod.object({
 });
 
 /**
+ * @summary Send payment receipt image via WhatsApp
+ */
+export const SendPaymentReceiptWhatsappParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const SendPaymentReceiptWhatsappResponse = zod.object({
+  ok: zod.boolean(),
+  sent: zod.boolean(),
+});
+
+/**
  * @summary Patient billing overview
  */
 export const GetPatientBillingParams = zod.object({

@@ -9,6 +9,7 @@ import {
   useListQuotations,
   useListTreatments,
   useGetPatientBilling,
+  useSendPaymentReceiptWhatsapp,
   getListPaymentsQueryKey,
   getGetBillingSummaryQueryKey,
   getGetPatientBillingQueryKey,
@@ -30,6 +31,7 @@ import {
   X,
   History,
   User,
+  Send,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -190,6 +192,7 @@ export default function Billing() {
   const [form, setForm] = useState(emptyMetaForm);
   const [lines, setLines] = useState<PaymentLine[]>([emptyCatalogLine()]);
   const [saving, setSaving] = useState(false);
+  const [sendingReceiptId, setSendingReceiptId] = useState<number | null>(null);
 
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -231,6 +234,7 @@ export default function Billing() {
   const createPayment = useCreatePayment();
   const updatePayment = useUpdatePayment();
   const deletePayment = useDeletePayment();
+  const sendPaymentReceipt = useSendPaymentReceiptWhatsapp();
 
   const treatmentPriceByName = useMemo(() => {
     const map = new Map<string, number>();
@@ -481,6 +485,33 @@ export default function Billing() {
     }
   };
 
+  const handleSendReceipt = (paymentId: number, patientPhone?: string | null) => {
+    if (!patientPhone?.trim()) {
+      toast({
+        variant: "destructive",
+        title: "El paciente no tiene teléfono registrado para WhatsApp",
+      });
+      return;
+    }
+    setSendingReceiptId(paymentId);
+    sendPaymentReceipt.mutate(
+      { id: paymentId },
+      {
+        onSuccess: () => {
+          toast({ title: "Recibo enviado por WhatsApp al paciente" });
+          setSendingReceiptId(null);
+        },
+        onError: (err: { message?: string }) => {
+          toast({
+            variant: "destructive",
+            title: err?.message || "No se pudo enviar el recibo. Verifica que WhatsApp esté conectado.",
+          });
+          setSendingReceiptId(null);
+        },
+      },
+    );
+  };
+
   const handleDelete = (id: number, patientId?: number) => {
     if (!confirm("¿Eliminar este registro de pago?")) return;
     deletePayment.mutate(
@@ -703,18 +734,19 @@ export default function Billing() {
                   </p>
                 ) : (
                   <div className="border border-border/40 rounded-lg overflow-hidden">
-                    <div className="hidden sm:grid sm:grid-cols-[110px_1fr_120px_100px_100px] gap-2 px-3 py-2 bg-muted/30 text-[10px] uppercase tracking-wide text-muted-foreground font-medium">
+                    <div className="hidden sm:grid sm:grid-cols-[110px_1fr_120px_100px_100px_150px] gap-2 px-3 py-2 bg-muted/30 text-[10px] uppercase tracking-wide text-muted-foreground font-medium">
                       <span>Fecha abono</span>
                       <span>Tratamiento / concepto</span>
                       <span className="text-right">Monto</span>
                       <span>Tipo</span>
                       <span>Método</span>
+                      <span className="text-center">Recibo</span>
                     </div>
                     <div className="divide-y divide-border/30 max-h-[360px] overflow-y-auto">
                       {patientHistory.map((p) => (
                         <div
                           key={p.id}
-                          className="grid grid-cols-1 sm:grid-cols-[110px_1fr_120px_100px_100px] gap-2 px-3 py-3 text-sm hover:bg-muted/10"
+                          className="grid grid-cols-1 sm:grid-cols-[110px_1fr_120px_100px_100px_150px] gap-2 px-3 py-3 text-sm hover:bg-muted/10"
                         >
                           <div className="flex sm:block items-center gap-2">
                             <span className="text-[10px] uppercase text-muted-foreground sm:hidden">
@@ -768,6 +800,19 @@ export default function Billing() {
                             <p className="text-muted-foreground text-xs">
                               {METHOD_LABELS[p.paymentMethod] ?? p.paymentMethod}
                             </p>
+                          </div>
+                          <div className="flex sm:justify-center items-center">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-8 text-xs gap-1.5 text-emerald-600 border-emerald-600/30 hover:bg-emerald-500/10"
+                              disabled={sendingReceiptId === p.id || sendPaymentReceipt.isPending}
+                              onClick={() => handleSendReceipt(p.id, selectedPatient?.phone)}
+                            >
+                              <Send className="h-3.5 w-3.5" />
+                              {sendingReceiptId === p.id ? "Enviando..." : "Enviar por WhatsApp"}
+                            </Button>
                           </div>
                         </div>
                       ))}
@@ -835,7 +880,7 @@ export default function Billing() {
                       {p.paymentDate} · Registrado {formatMessageDateTime(p.createdAt)}
                     </p>
                   </div>
-                  <div className="flex items-center gap-3 flex-shrink-0">
+                  <div className="flex items-center gap-2 flex-shrink-0 flex-wrap justify-end">
                     <p
                       className={`text-xl font-bold ${
                         p.paymentType === "devolucion" ? "text-red-400" : "text-emerald-400"
@@ -844,6 +889,17 @@ export default function Billing() {
                       {p.paymentType === "devolucion" ? "−" : "+"}
                       {formatPriceCop(p.amount)}
                     </p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8 text-xs gap-1 text-emerald-600 border-emerald-600/30"
+                      disabled={sendingReceiptId === p.id || sendPaymentReceipt.isPending}
+                      onClick={() => handleSendReceipt(p.id, p.patientPhone)}
+                      title="Enviar recibo por WhatsApp"
+                    >
+                      <Send className="h-3.5 w-3.5" />
+                      WhatsApp
+                    </Button>
                     <Button variant="ghost" size="icon" onClick={() => openEdit(p)}>
                       <Pencil className="h-4 w-4" />
                     </Button>
