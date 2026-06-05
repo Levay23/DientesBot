@@ -90,9 +90,91 @@ function formatPaymentDate(dateStr: string) {
   return `${d}/${m}/${y}`;
 }
 
+type ScopedPayment = {
+  quotationId?: number | null;
+  treatmentName?: string | null;
+  concept?: string | null;
+  expectedTotal?: number | null;
+  amount: number;
+  paymentType: string;
+};
+
+type ScopedQuotation = {
+  id?: number;
+  total?: number;
+  paid?: number;
+  balance?: number;
+};
+
+function signedPaymentAmount(p: ScopedPayment): number {
+  return p.paymentType === "devolucion" ? -Math.abs(p.amount) : Math.abs(p.amount);
+}
+
+function detectLatestQuotationId(payments: ScopedPayment[] | undefined): number | null {
+  for (const p of payments ?? []) {
+    if (p.quotationId) return p.quotationId;
+  }
+  return null;
+}
+
+function computeScopedBillingSummary(
+  quotations: ScopedQuotation[] | undefined,
+  payments: ScopedPayment[] | undefined,
+  scopeQuotationId: string,
+): {
+  totalPaid: number;
+  totalOwed: number;
+  remainingDebt: number;
+  scopeLabel: string;
+} {
+  if (scopeQuotationId && scopeQuotationId !== "__none__") {
+    const q = quotations?.find((x) => x.id === parseInt(scopeQuotationId, 10));
+    if (q) {
+      return {
+        totalPaid: q.paid ?? 0,
+        totalOwed: q.total ?? 0,
+        remainingDebt: q.balance ?? 0,
+        scopeLabel: `Presupuesto #${q.id}`,
+      };
+    }
+  }
+
+  const standalone = (payments ?? []).filter((p) => !p.quotationId);
+  const totalPaid = standalone.reduce((s, p) => s + signedPaymentAmount(p), 0);
+  const expectedByTreatment = new Map<string, number>();
+
+  for (const p of standalone) {
+    const key = (p.treatmentName || p.concept || "tratamiento").toLowerCase().trim();
+    if (p.expectedTotal != null && p.expectedTotal > 0) {
+      expectedByTreatment.set(key, Math.max(expectedByTreatment.get(key) ?? 0, p.expectedTotal));
+    }
+  }
+
+  let totalOwed = 0;
+  let remainingDebt = 0;
+  for (const [key, expected] of expectedByTreatment) {
+    const paid = standalone
+      .filter((p) => {
+        const pKey = (p.treatmentName || p.concept || "tratamiento").toLowerCase().trim();
+        return pKey === key;
+      })
+      .reduce((s, p) => s + signedPaymentAmount(p), 0);
+    totalOwed += expected;
+    remainingDebt += Math.max(0, expected - paid);
+  }
+
+  return {
+    totalPaid,
+    totalOwed,
+    remainingDebt,
+    scopeLabel: "Tratamiento individual (sin presupuesto)",
+  };
+}
+
 function PatientBillingSummary({
   billing,
   compact,
+  scopeLabel,
 }: {
   billing: {
     totalPaid?: number;
@@ -101,6 +183,7 @@ function PatientBillingSummary({
     totalDebt?: number;
   };
   compact?: boolean;
+  scopeLabel?: string;
 }) {
   const abonoTotal = billing.totalPaid ?? 0;
   const deudaTotal = billing.totalOwed ?? 0;
@@ -108,16 +191,21 @@ function PatientBillingSummary({
 
   return (
     <div className={compact ? "space-y-2" : "space-y-3"}>
+      {scopeLabel && (
+        <p className="text-xs text-muted-foreground">
+          Resumen de: <span className="font-medium text-foreground">{scopeLabel}</span>
+        </p>
+      )}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
         <div className="rounded-lg border border-emerald-500/30 p-3 bg-emerald-500/5">
           <p className="text-xs text-muted-foreground">Abono total</p>
           <p className="text-xl font-bold text-emerald-500">{formatPriceCop(abonoTotal)}</p>
-          <p className="text-[10px] text-muted-foreground mt-1">Todo lo pagado por el paciente</p>
+          <p className="text-[10px] text-muted-foreground mt-1">Pagado en este contexto</p>
         </div>
         <div className="rounded-lg border border-border/40 p-3 bg-muted/10">
           <p className="text-xs text-muted-foreground">Deuda total</p>
           <p className="text-xl font-bold text-foreground">{formatPriceCop(deudaTotal)}</p>
-          <p className="text-[10px] text-muted-foreground mt-1">Presupuestos + tratamientos</p>
+          <p className="text-[10px] text-muted-foreground mt-1">Total del presupuesto o tratamiento</p>
         </div>
         <div
           className={cn(
@@ -246,6 +334,8 @@ function paidForTreatment(
 export default function Billing() {
   const [search, setSearch] = useState("");
   const [selectedPatientId, setSelectedPatientId] = useState<number | null>(null);
+  const [patientScopeQuotationId, setPatientScopeQuotationId] = useState<string>("__none__");
+  const [scopeInitializedForPatient, setScopeInitializedForPatient] = useState<number | null>(null);
   const [anchorPaymentId, setAnchorPaymentId] = useState<number | null>(null);
   const [listPatientOpen, setListPatientOpen] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -292,6 +382,46 @@ export default function Billing() {
       return b.id - a.id;
     });
   }, [selectedPatientBilling?.payments]);
+
+  useEffect(() => {
+    if (!selectedPatientId) {
+      setPatientScopeQuotationId("__none__");
+      setScopeInitializedForPatient(null);
+      return;
+    }
+    if (scopeInitializedForPatient === selectedPatientId || !selectedPatientBilling) return;
+    const latestQuote = detectLatestQuotationId(selectedPatientBilling.payments);
+    setPatientScopeQuotationId(latestQuote ? String(latestQuote) : "__none__");
+    setScopeInitializedForPatient(selectedPatientId);
+  }, [selectedPatientId, selectedPatientBilling, scopeInitializedForPatient]);
+
+  const scopedPatientSummary = useMemo(() => {
+    if (!selectedPatientBilling) return null;
+    return computeScopedBillingSummary(
+      selectedPatientBilling.quotations,
+      selectedPatientBilling.payments,
+      patientScopeQuotationId,
+    );
+  }, [selectedPatientBilling, patientScopeQuotationId]);
+
+  const scopedPatientHistory = useMemo(() => {
+    if (patientScopeQuotationId === "__none__") {
+      return patientHistory.filter((p) => !p.quotationId);
+    }
+    const qid = parseInt(patientScopeQuotationId, 10);
+    return patientHistory.filter((p) => p.quotationId === qid);
+  }, [patientHistory, patientScopeQuotationId]);
+
+  const patientScopeOptions = useMemo(
+    () => selectedPatientBilling?.quotations ?? [],
+    [selectedPatientBilling?.quotations],
+  );
+
+  const dialogScopedSummary = useMemo(() => {
+    if (!patientBilling) return null;
+    const scope = form.quotationId || "__none__";
+    return computeScopedBillingSummary(patientBilling.quotations, patientBilling.payments, scope);
+  }, [patientBilling, form.quotationId]);
 
   const createPayment = useCreatePayment();
   const updatePayment = useUpdatePayment();
@@ -382,7 +512,8 @@ export default function Billing() {
 
   const openCreateForPatient = (patientId: number) => {
     setEditing(null);
-    setForm({ ...emptyMetaForm(), patientId: String(patientId) });
+    const qid = patientScopeQuotationId !== "__none__" ? patientScopeQuotationId : "";
+    setForm({ ...emptyMetaForm(), patientId: String(patientId), quotationId: qid });
     setLines([emptyCatalogLine()]);
     setDialogOpen(true);
   };
@@ -390,6 +521,7 @@ export default function Billing() {
   const closePatient = () => {
     setSelectedPatientId(null);
     setAnchorPaymentId(null);
+    setScopeInitializedForPatient(null);
   };
 
   const openPatient = (patientId: number, paymentId?: number) => {
@@ -645,8 +777,27 @@ export default function Billing() {
       <CardContent className="space-y-4">
         {selectedPatientBillingLoading ? (
           <Skeleton className="h-16 w-full" />
-        ) : selectedPatientBilling ? (
-          <PatientBillingSummary billing={selectedPatientBilling} />
+        ) : scopedPatientSummary ? (
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">Ver facturación de</Label>
+              <Select value={patientScopeQuotationId} onValueChange={setPatientScopeQuotationId}>
+                <SelectTrigger className="h-9">
+                  <SelectValue placeholder="Seleccionar contexto" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">Tratamiento individual (sin presupuesto)</SelectItem>
+                  {patientScopeOptions.map((q) => (
+                    <SelectItem key={q.id} value={String(q.id)}>
+                      Presupuesto #{q.id} — {formatPriceCop(q.total ?? 0)}
+                      {q.balance != null && q.balance > 0 ? ` · Saldo ${formatPriceCop(q.balance)}` : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <PatientBillingSummary billing={scopedPatientSummary} scopeLabel={scopedPatientSummary.scopeLabel} />
+          </div>
         ) : null}
 
         <div className="space-y-2">
@@ -654,8 +805,8 @@ export default function Billing() {
             <div className="flex items-center gap-2">
               <History className="h-4 w-4 text-muted-foreground" />
               <h3 className="font-semibold text-sm">Historial de abonos</h3>
-              {patientHistory.length > 0 && (
-                <span className="text-xs text-muted-foreground">({patientHistory.length})</span>
+              {scopedPatientHistory.length > 0 && (
+                <span className="text-xs text-muted-foreground">({scopedPatientHistory.length})</span>
               )}
             </div>
           </div>
@@ -665,9 +816,11 @@ export default function Billing() {
                 <Skeleton key={i} className="h-12 w-full" />
               ))}
             </div>
-          ) : !patientHistory.length ? (
+          ) : !scopedPatientHistory.length ? (
             <p className="text-sm text-muted-foreground py-6 text-center border border-dashed border-border/50 rounded-lg">
-              Este paciente aún no tiene abonos. Usa &quot;Nuevo abono&quot; para registrar el primero.
+              {patientScopeQuotationId === "__none__"
+                ? "No hay abonos de tratamiento individual. Cambia el selector o registra un nuevo abono."
+                : "Este presupuesto aún no tiene abonos. Usa \"Nuevo abono\" para registrar el primero."}
             </p>
           ) : (
             <div className="border border-border/40 rounded-lg overflow-hidden">
@@ -680,7 +833,7 @@ export default function Billing() {
                 <span className="text-center">Acciones</span>
               </div>
               <div className="divide-y divide-border/30 max-h-[360px] overflow-y-auto">
-                {patientHistory.map((p) => (
+                {scopedPatientHistory.map((p) => (
                   <div
                     key={p.id}
                     className="grid grid-cols-1 sm:grid-cols-[110px_1fr_120px_100px_100px_200px] gap-2 px-3 py-3 text-sm hover:bg-muted/10"
@@ -1061,26 +1214,14 @@ export default function Billing() {
               <>
                 {patientBillingLoading ? (
                   <Skeleton className="h-20 w-full" />
-                ) : patientBilling ? (
+                ) : dialogScopedSummary ? (
                   <Card className="border-border/50 bg-muted/20">
                     <CardContent className="p-4 space-y-3">
-                      <PatientBillingSummary billing={patientBilling} compact />
-                      {selectedQuoteBilling && (
-                        <div className="grid grid-cols-2 gap-3 pt-2 border-t border-border/40 text-sm">
-                          <div>
-                            <p className="text-xs text-muted-foreground">
-                              Presupuesto #{selectedQuoteBilling.id} — deuda total
-                            </p>
-                            <p className="font-semibold">{formatPriceCop(selectedQuoteBilling.total ?? 0)}</p>
-                          </div>
-                          <div>
-                            <p className="text-xs text-muted-foreground">Deuda restante presupuesto</p>
-                            <p className="font-semibold text-amber-500">
-                              {formatPriceCop(selectedQuoteBilling.balance ?? 0)}
-                            </p>
-                          </div>
-                        </div>
-                      )}
+                      <PatientBillingSummary
+                        billing={dialogScopedSummary}
+                        compact
+                        scopeLabel={dialogScopedSummary.scopeLabel}
+                      />
                       {totalAbonoToday > 0 && (
                         <div className="col-span-2 sm:col-span-4 pt-2 border-t border-border/40 flex flex-wrap gap-4">
                           <div>

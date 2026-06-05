@@ -22,6 +22,14 @@ type QuoteItemLike = {
   quantity?: number;
 };
 
+/** Presupuesto activo = el del abono más reciente vinculado a facturación. */
+export function detectActiveQuotationId(payments: PaymentLike[]): number | null {
+  for (const p of payments) {
+    if (p.quotationId) return p.quotationId;
+  }
+  return null;
+}
+
 /** Reparte abonos del presupuesto entre líneas (nombre exacto + excedente FIFO). */
 export function buildQuotationItemBalances(
   items: QuoteItemLike[],
@@ -77,11 +85,16 @@ export function buildQuotationItemBalances(
 export function computeStandaloneTreatmentDebts(
   payments: PaymentLike[],
   patientTreatmentPrice?: number | null,
-): { totalOwed: number; remaining: number } {
+): { totalOwed: number; remaining: number; totalPaid: number } {
+  const standalonePayments = payments.filter((p) => !p.quotationId);
+  const totalPaid = standalonePayments.reduce(
+    (s, p) => s + signedPaymentAmount(p.amount, p.paymentType),
+    0,
+  );
+
   const expectedByTreatment = new Map<string, number>();
 
-  for (const p of payments) {
-    if (p.quotationId) continue;
+  for (const p of standalonePayments) {
     const key = (p.treatmentName || p.concept || "tratamiento").toLowerCase().trim();
     if (p.expectedTotal != null && p.expectedTotal > 0) {
       expectedByTreatment.set(key, Math.max(expectedByTreatment.get(key) ?? 0, p.expectedTotal));
@@ -96,9 +109,8 @@ export function computeStandaloneTreatmentDebts(
   let remaining = 0;
 
   for (const [key, expected] of expectedByTreatment) {
-    const paid = payments
+    const paid = standalonePayments
       .filter((p) => {
-        if (p.quotationId) return false;
         const pKey = (p.treatmentName || p.concept || "tratamiento").toLowerCase().trim();
         return pKey === key;
       })
@@ -107,7 +119,7 @@ export function computeStandaloneTreatmentDebts(
     remaining += computeBalance(expected, paid);
   }
 
-  return { totalOwed, remaining };
+  return { totalOwed, remaining, totalPaid };
 }
 
 export function summarizePatientBilling(
@@ -115,11 +127,13 @@ export function summarizePatientBilling(
   payments: PaymentLike[],
   paidByQuotation: Map<number, number>,
   patientTreatmentPrice?: number | null,
+  scopeQuotationId?: number | null,
 ): {
   totalPaid: number;
   totalOwed: number;
   remainingDebt: number;
   totalDebt: number;
+  activeQuotationId: number | null;
   quotationsWithBalance: {
     id: number;
     total: number;
@@ -128,8 +142,6 @@ export function summarizePatientBilling(
     items: ReturnType<typeof buildQuotationItemBalances>;
   }[];
 } {
-  const totalPaid = payments.reduce((s, p) => s + signedPaymentAmount(p.amount, p.paymentType), 0);
-
   const quotationsWithBalance = quotes.map((q) => {
     const paid = paidByQuotation.get(q.id) ?? 0;
     const items = buildQuotationItemBalances(q.items, q.id, paid, payments);
@@ -142,19 +154,31 @@ export function summarizePatientBilling(
     };
   });
 
-  const quotationOwed = quotationsWithBalance.reduce((s, q) => s + q.total, 0);
-  const quotationRemaining = quotationsWithBalance.reduce((s, q) => s + q.balance, 0);
+  const activeQuotationId =
+    scopeQuotationId !== undefined ? scopeQuotationId : detectActiveQuotationId(payments);
 
-  const standalone = computeStandaloneTreatmentDebts(payments, patientTreatmentPrice);
+  let totalPaid: number;
+  let totalOwed: number;
+  let remainingDebt: number;
 
-  const totalOwed = quotationOwed + standalone.totalOwed;
-  const remainingDebt = quotationRemaining + standalone.remaining;
+  if (activeQuotationId != null) {
+    const q = quotationsWithBalance.find((x) => x.id === activeQuotationId);
+    totalPaid = q?.paid ?? 0;
+    totalOwed = q?.total ?? 0;
+    remainingDebt = q?.balance ?? 0;
+  } else {
+    const standalone = computeStandaloneTreatmentDebts(payments, patientTreatmentPrice);
+    totalPaid = standalone.totalPaid;
+    totalOwed = standalone.totalOwed;
+    remainingDebt = standalone.remaining;
+  }
 
   return {
     totalPaid,
     totalOwed,
     remainingDebt,
     totalDebt: remainingDebt,
+    activeQuotationId,
     quotationsWithBalance,
   };
 }

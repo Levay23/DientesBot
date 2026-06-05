@@ -231,6 +231,15 @@ router.get("/billing/patient/:patientId", async (req, res): Promise<void> => {
 
   const paidMap = await getPaidByQuotation(quotes.map((q) => q.id));
 
+  const scopeParam = req.query.quotationId;
+  let scopeQuotationId: number | null | undefined = undefined;
+  if (scopeParam === "standalone" || scopeParam === "none") {
+    scopeQuotationId = null;
+  } else if (scopeParam != null && String(scopeParam).trim() !== "") {
+    const parsedScope = parseInt(String(scopeParam), 10);
+    if (!isNaN(parsedScope)) scopeQuotationId = parsedScope;
+  }
+
   const summary = summarizePatientBilling(
     quotes.map((q) => ({
       id: q.id,
@@ -240,6 +249,7 @@ router.get("/billing/patient/:patientId", async (req, res): Promise<void> => {
     payments,
     paidMap,
     patient.treatmentPrice,
+    scopeQuotationId,
   );
 
   const quotationsWithBalance = quotes.map((q) => {
@@ -261,6 +271,7 @@ router.get("/billing/patient/:patientId", async (req, res): Promise<void> => {
     totalOwed: summary.totalOwed,
     remainingDebt: summary.remainingDebt,
     totalDebt: summary.remainingDebt,
+    activeQuotationId: summary.activeQuotationId,
     quotations: quotationsWithBalance,
     payments,
   });
