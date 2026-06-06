@@ -62,6 +62,30 @@ function colombiaToday(): string {
   }).format(new Date());
 }
 
+function toColombiaDateString(value: Date | string): string {
+  const d = typeof value === "string" ? new Date(value) : value;
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Bogota",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(d);
+}
+
+function normalizePaymentDate(paymentDate: unknown): string {
+  if (typeof paymentDate === "string") return paymentDate.slice(0, 10);
+  if (paymentDate instanceof Date) return toColombiaDateString(paymentDate);
+  return String(paymentDate).slice(0, 10);
+}
+
+function isCollectedOnColombiaDay(
+  paymentDate: unknown,
+  createdAt: Date | string,
+  day: string,
+): boolean {
+  return normalizePaymentDate(paymentDate) === day || toColombiaDateString(createdAt) === day;
+}
+
 function colombiaMonthStart(): string {
   const now = new Date();
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -105,7 +129,7 @@ router.get("/billing/summary", async (_req, res): Promise<void> => {
   for (const p of allPayments) {
     const signed = signedPaymentAmount(p.amount, p.paymentType);
     totalCollected += signed;
-    if (p.paymentDate >= monthStart) totalThisMonth += signed;
+    if (normalizePaymentDate(p.paymentDate) >= monthStart) totalThisMonth += signed;
   }
 
   const quotes = await db.select({
@@ -125,7 +149,7 @@ router.get("/billing/summary", async (_req, res): Promise<void> => {
     }
   }
 
-  const todayPayments = allPayments.filter((p) => p.paymentDate === today);
+  const todayPayments = allPayments.filter((p) => isCollectedOnColombiaDay(p.paymentDate, p.createdAt, today));
   const collectedToday = todayPayments.reduce(
     (sum, p) => sum + signedPaymentAmount(p.amount, p.paymentType),
     0,
