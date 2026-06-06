@@ -29,6 +29,14 @@ import { logger } from "../lib/logger";
 
 const router: IRouter = Router();
 
+function serializeMessageForApi(msg: typeof messagesTable.$inferSelect) {
+  const { mediaData, ...rest } = msg;
+  return {
+    ...rest,
+    hasMedia: Boolean(mediaData && msg.mediaMimeType),
+  };
+}
+
 router.get("/conversations/stats/unread", async (_req, res): Promise<void> => {
   const [unread] = await db.select({ count: sql<number>`count(*)::int` }).from(messagesTable)
     .where(eq(messagesTable.read, false));
@@ -103,7 +111,7 @@ router.get("/conversations/:id", async (req, res): Promise<void> => {
     patient ? { name: patient.name, phone: patient.phone } : null,
   );
 
-  res.json({ conversation: enrichedConv, patient, messages });
+  res.json({ conversation: enrichedConv, patient, messages: messages.map(serializeMessageForApi) });
 });
 
 router.put("/conversations/:id/mode", async (req, res): Promise<void> => {
@@ -118,6 +126,27 @@ router.put("/conversations/:id/mode", async (req, res): Promise<void> => {
   res.json(conv);
 });
 
+router.get("/messages/media/:messageId", async (req, res): Promise<void> => {
+  const raw = Array.isArray(req.params.messageId) ? req.params.messageId[0] : req.params.messageId;
+  const messageId = parseInt(raw, 10);
+  if (isNaN(messageId)) { res.status(400).json({ error: "ID inválido" }); return; }
+
+  const [msg] = await db.select({
+    mediaData: messagesTable.mediaData,
+    mediaMimeType: messagesTable.mediaMimeType,
+  }).from(messagesTable).where(eq(messagesTable.id, messageId)).limit(1);
+
+  if (!msg?.mediaData || !msg.mediaMimeType) {
+    res.status(404).json({ error: "Este mensaje no tiene archivo adjunto" });
+    return;
+  }
+
+  const buffer = Buffer.from(msg.mediaData, "base64");
+  res.setHeader("Content-Type", msg.mediaMimeType);
+  res.setHeader("Cache-Control", "public, max-age=86400");
+  res.send(buffer);
+});
+
 router.get("/messages/:conversationId", async (req, res): Promise<void> => {
   const raw = Array.isArray(req.params.conversationId) ? req.params.conversationId[0] : req.params.conversationId;
   const params = SendMessageParams.safeParse({ conversationId: parseInt(raw, 10) });
@@ -125,7 +154,7 @@ router.get("/messages/:conversationId", async (req, res): Promise<void> => {
   const messages = await db.select().from(messagesTable)
     .where(eq(messagesTable.conversationId, params.data.conversationId))
     .orderBy(messagesTable.sentAt);
-  res.json(messages);
+  res.json(messages.map(serializeMessageForApi));
 });
 
 router.post("/conversations/incoming", async (req, res): Promise<void> => {
@@ -300,7 +329,7 @@ router.post("/messages/:conversationId", async (req, res): Promise<void> => {
     }
   }
 
-  res.status(201).json({ ...msg, sentToWhatsApp, whatsappError });
+  res.status(201).json({ ...serializeMessageForApi(msg), sentToWhatsApp, whatsappError });
 });
 
 /** Repara JID/teléfono vinculando un paciente registrado (body: { patientId } o { phone }). */

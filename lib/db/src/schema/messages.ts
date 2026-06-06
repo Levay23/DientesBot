@@ -8,6 +8,10 @@ export const messagesTable = pgTable("messages", {
   conversationId: integer("conversation_id").notNull().references(() => conversationsTable.id, { onDelete: "cascade" }),
   content: text("content").notNull(),
   sender: text("sender").notNull().default("patient"),
+  messageType: text("message_type").notNull().default("text"),
+  mediaMimeType: text("media_mime_type"),
+  mediaData: text("media_data"),
+  whatsappMsgId: text("whatsapp_msg_id"),
   sentAt: timestamp("sent_at").defaultNow().notNull(),
   read: boolean("read").notNull().default(false),
 });

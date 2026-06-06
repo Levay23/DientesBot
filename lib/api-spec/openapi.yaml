@@ -515,6 +515,28 @@ paths:
               schema:
                 $ref: "#/components/schemas/UnreadStats"
 
+  /messages/media/{messageId}:
+    get:
+      operationId: getMessageMedia
+      tags: [messages]
+      summary: Download media attached to a message
+      parameters:
+        - name: messageId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Media file
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "404":
+          description: Message has no media
+
   /messages/{conversationId}:
     get:
       operationId: getMessages
@@ -1678,6 +1700,16 @@ components:
         sender:
           type: string
           enum: [patient, agent, ai]
+        messageType:
+          type: string
+          enum: [text, image, audio, video, document, sticker]
+          default: text
+        mediaMimeType:
+          type: string
+          nullable: true
+        hasMedia:
+          type: boolean
+          description: True when the message has downloadable media
         sentAt:
           type: string
           format: date-time
