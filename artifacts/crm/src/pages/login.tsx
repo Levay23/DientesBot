@@ -13,6 +13,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { motion } from "framer-motion";
 import ClinicLogo from "@/components/clinic-logo";
 import { saveAuthToken } from "@/lib/auth-token";
+import type { ApiError } from "@workspace/api-client-react";
 
 
 const loginSchema = z.object({
@@ -60,11 +61,23 @@ export default function Login() {
           toast({ title: "Bienvenido", description: "Sesión iniciada correctamente." });
           setLocation("/dashboard");
         },
-        onError: () => {
+        onError: (err: ApiError | Error) => {
+          const status = "status" in err ? err.status : undefined;
+          if (status === 401) {
+            toast({
+              variant: "destructive",
+              title: "Error al iniciar sesión",
+              description: "Correo o contraseña incorrectos.",
+            });
+            return;
+          }
           toast({
             variant: "destructive",
-            title: "Error al iniciar sesión",
-            description: "Correo o contraseña incorrectos.",
+            title: "No se pudo conectar al servidor",
+            description:
+              status === 503
+                ? "La base de datos no está disponible en este momento. Espera 1–2 minutos y vuelve a intentar."
+                : "El sistema no respondió. Verifica tu conexión o intenta de nuevo en unos minutos.",
           });
         },
       }
