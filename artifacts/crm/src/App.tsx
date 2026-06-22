@@ -15,6 +15,8 @@ import AITraining from "@/pages/ai-training";
 import Quotations from "@/pages/quotations";
 import Treatments from "@/pages/treatments";
 import Billing from "@/pages/billing";
+import SystemMaintenanceOverlay from "@/components/system-maintenance-overlay";
+import { SYSTEM_MAINTENANCE } from "@/lib/maintenance";
 
 
 import { setBaseUrl, setAuthTokenGetter } from "@workspace/api-client-react";
@@ -67,6 +69,7 @@ function App() {
           <Router />
         </WouterRouter>
         <Toaster />
+        {SYSTEM_MAINTENANCE && <SystemMaintenanceOverlay />}
       </TooltipProvider>
     </QueryClientProvider>
   );

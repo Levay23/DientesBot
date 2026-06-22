@@ -3,6 +3,7 @@ import { db, settingsTable, conversationsTable, messagesTable, patientsTable, ai
 import { eq, desc, asc, or, ilike, and, gte } from "drizzle-orm";
 import { logger } from "./logger";
 import { DEFAULT_CLINIC_ADDRESS } from "./clinic-defaults";
+import { isSystemMaintenance, MAINTENANCE_MESSAGE } from "./maintenance";
 
 let _groq: Groq | null = null;
 function getGroq(): Groq {
@@ -92,6 +93,9 @@ export async function generateAIResponse(
   patientMessage: string,
   opts: AIOptions = {}
 ): Promise<AIResponse> {
+  if (isSystemMaintenance()) {
+    return { message: MAINTENANCE_MESSAGE, actions: {} };
+  }
   try {
     const [settings, personality, knowledgeEntries, allTreatments] = await Promise.all([
       db.select().from(settingsTable).limit(1),

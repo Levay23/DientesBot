@@ -17,6 +17,7 @@ import { amendAiMessageIfBookingFailed } from "./booking-message";
 import { parseIncomingContact, resolveOutboundJid, phoneToJidIfValid } from "./jid-utils";
 import { resolveConversationIdentity, isValidColombianPhone } from "./conversation-patient-sync";
 import { parseWhatsAppMessage } from "./whatsapp-message-parser";
+import { isSystemMaintenance } from "./maintenance";
 
 export interface WAState {
   connected: boolean;
@@ -91,6 +92,10 @@ export function phoneToJid(phone: string): string {
 }
 
 export async function sendWAMessage(jid: string, text: string): Promise<boolean> {
+  if (isSystemMaintenance()) {
+    logger.info({ jid }, "Modo mantenimiento: envío WhatsApp bloqueado");
+    return false;
+  }
   if (!sock || !_state.connected) return false;
   if (!jid?.includes("@")) return false;
   try {
@@ -319,6 +324,10 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo): Promise<void> 
     logger.info({ phone: formattedPhone, aiMode: latestConv?.aiMode, globalBotEnabled, aiEnabled }, "Evaluando si responder con IA");
 
     if (!aiEnabled) return;
+    if (isSystemMaintenance()) {
+      logger.info({ phone: formattedPhone }, "Modo mantenimiento: no se envía respuesta IA");
+      return;
+    }
 
     let aiText = "";
     try {

@@ -2,6 +2,7 @@ import { db, automationsTable, automationHistoryTable, patientsTable, appointmen
 import { eq, and, sql, isNull, inArray, gte, lte } from "drizzle-orm";
 import type { WASocket } from "@whiskeysockets/baileys";
 import { getWhatsAppSock, getWAState } from "./whatsapp";
+import { isSystemMaintenance } from "./maintenance";
 import { phoneToJidIfValid } from "./jid-utils";
 import { logger } from "./logger";
 
@@ -120,6 +121,7 @@ async function sendAutomationWhatsApp(
   text: string,
   meta: { automationId: number; patientId: number; appointmentId?: number },
 ): Promise<boolean> {
+  if (isSystemMaintenance()) return false;
   const sock = getWhatsAppSock();
   const wa = getWAState();
   if (!sock || !wa.connected) {
@@ -381,6 +383,8 @@ export async function runAppointmentConfirmedAutomations(appt: ApptWithPatient):
 }
 
 export async function runAutomations(): Promise<void> {
+  if (isSystemMaintenance()) return;
+
   const sock = getWhatsAppSock();
   const wa = getWAState();
 
