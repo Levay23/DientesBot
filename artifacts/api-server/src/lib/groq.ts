@@ -1,6 +1,6 @@
 import Groq, { toFile } from "groq-sdk";
 import { db, settingsTable, conversationsTable, messagesTable, patientsTable, aiKnowledgeTable, aiPersonalityTable, quotationsTable, appointmentsTable, treatmentsTable } from "@workspace/db";
-import { eq, desc, asc, or, ilike, and, gte } from "drizzle-orm";
+import { eq, desc, or, ilike, and, gte } from "drizzle-orm";
 import { logger } from "./logger";
 import { DEFAULT_CLINIC_ADDRESS } from "./clinic-defaults";
 import { isSystemMaintenance, MAINTENANCE_MESSAGE } from "./maintenance";
@@ -177,29 +177,7 @@ export async function generateAIResponse(
       ? `\nLISTADO DE TRATAMIENTOS Y PRECIOS BASE:\n${allTreatments.map(t => `- ${t.name}: ${Number(t.price).toLocaleString()} pesos`).join("\n")}\n`
       : "";
 
-    // Knowledge Map
-    const KEYWORD_MAP: Record<string, string[]> = {
-      "Odontología General — Precios":       ["resina","obturac","caries","sellante","profilaxis","limpieza","higiene","urgencia","calculo","sarro","general","servicios","ofrece","disponibles"],
-      "Blanqueamiento Dental — Precios":     ["blanquea","whitening","aclar","diente amarillo","mancha"],
-      "Estética Dental — Carillas y Diseño de Sonrisa": ["carilla","diseño de sonrisa","estética","veneers","microdiseño","cerómero","disilicato","sonrisa"],
-      "Rehabilitación Oral — Coronas y Prótesis": ["corona","rehabilit","incrustac","nucleo","pilar","puente","recementar","provisional","platino","tradicional","zirconio"],
-      "Prótesis Dentales — Precios":         ["prótesis","protesis","acker","dentadura","dientes postizos","base","rebase","gancho"],
-      "Implantes Dentales — Precios Completos": ["implante","implan","titanio","prom","pilar","sobredentadura","hibrida","hueso","membrana","seno"],
-      "Cirugía Oral — Precios":              ["cirugia","cirugía","extraccion","extracción","exodoncia","muela del juicio","cordal","frenilect","biopsia","capuchon"],
-      "Periodoncia — Encías y Soporte Dental": ["encia","encía","periodont","curetaje","gingivect","reborde","injerto","sangra","piorrhea"],
-      "Endodoncia — Tratamiento de Conductos": ["endodoncia","conducto","nervio","pulpa","apice","apicectomia","reabsorcion","canal"],
-      "Ortodoncia — Planes y Precios":       ["ortodoncia","bracket","aligner","retenedor","mordida","dientes chuecos","torcidos","alinear","aparatos","brace"],
-      "Información sobre pagos y política de citas": ["pago","precio","cobro","cuota","financi","cancelar","politica","horario","direccion","ubicacion","costo","valor","cuanto vale","cuanto cuesta","cotizacion","presupuesto"],
-    };
-
-    const searchText = (patientMessage + " " + (opts.history ?? []).slice(-3).map(m => m.content).join(" ")).toLowerCase();
-    const filteredEntries = knowledgeEntries.filter(entry => {
-      if (entry.category === "general") return true;
-      const keywords = KEYWORD_MAP[entry.title] ?? [];
-      return keywords.some(kw => searchText.includes(kw));
-    });
-
-    const entriesToUse = filteredEntries.length > 0 ? filteredEntries : knowledgeEntries.filter(e => e.category === "general");
+    const entriesToUse = knowledgeEntries;
     const knowledgeSection = `\nARTÍCULOS DE AYUDA:\n${entriesToUse.map(e => `[${e.title}]\n${e.content}`).join("\n\n")}\n`;
 
     let conversationHistory: { role: "user" | "assistant"; content: string }[] = [];
@@ -208,10 +186,11 @@ export async function generateAIResponse(
     } else if (conversationId) {
       const pastMessages = await db.select().from(messagesTable)
         .where(eq(messagesTable.conversationId, conversationId))
-        .orderBy(asc(messagesTable.id))
+        .orderBy(desc(messagesTable.id))
         .limit(15);
-      conversationHistory = pastMessages.filter(m => m.sender === "patient" || m.sender === "ai")
-        .map(m => ({ role: m.sender === "patient" ? "user" : "assistant", content: m.content }));
+      conversationHistory = [...pastMessages].reverse()
+        .filter(m => m.sender === "patient" || m.sender === "ai")
+        .map(m => ({ role: m.sender === "patient" ? "user" as const : "assistant" as const, content: m.content }));
     }
 
     const assistantName = p?.name ?? "Andrea";
@@ -247,7 +226,8 @@ HOY: ${colombiaDay} ${colombiaDate}, ${colombiaTime}.
 ${personalitySection}
 ${clinicInfoSection}
 PAUTAS IMPORTANTES PARA TU COMPORTAMIENTO:
-- Conversación natural: No tienes que presentarte ("Soy ${assistantName}") en cada mensaje. Si el paciente ya te conoce y te saluda, fluye con la conversación de forma natural y cálida, sin usar frases repetitivas.
+- Conversación natural: No repitas la misma frase, saludo ni bloque de información que ya diste en mensajes anteriores de este chat. Lee el historial y continúa la conversación de forma fluida.
+- No tienes que presentarte ("Soy ${assistantName}") en cada mensaje. Si el paciente ya te conoce y te saluda, fluye con la conversación de forma natural y cálida.
 - Respuestas completas y asesoría: Cuando te pregunten por tratamientos (como implantes, diseños, etc.), lee bien los ARTÍCULOS DE AYUDA. Da una explicación detallada y clara de las opciones.
 - Precios y variaciones: Si das un precio, aclara siempre que es un "precio base" y que puede variar dependiendo del caso clínico. Usa siempre la palabra "pesos" (ej. "Cuesta 100.000 pesos"). ¡PROHIBIDO usar el símbolo "$"!
 - Citas de valoración: Puedes invitar a agendar valoración cuando pidan precios o info. Ofrece horarios disponibles y, cuando el paciente confirme fecha y hora (sí, listo, me sirve, agéndame...), reserva con bookAppointment.

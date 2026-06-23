@@ -1,7 +1,7 @@
 /**
  * Modo mantenimiento global del CRM (sincronizar con api-server/src/lib/maintenance.ts).
  */
-export const SYSTEM_MAINTENANCE = true;
+export const SYSTEM_MAINTENANCE = false;
 
 export const MAINTENANCE_TITLE = "Servicio temporalmente suspendido";
 
