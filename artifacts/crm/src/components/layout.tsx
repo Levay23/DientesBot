@@ -1,6 +1,7 @@
 import { useGetMe, useLogout } from "@workspace/api-client-react";
 import { Link, useLocation } from "wouter";
 import { clearAuthToken } from "@/lib/auth-token";
+import type { ApiError } from "@workspace/api-client-react";
 import { 
   LayoutDashboard, 
   Users, 
@@ -45,20 +46,35 @@ const moreNav = [
 const allNav = [...mainNav, ...moreNav];
 
 export default function Layout({ children }: { children: React.ReactNode }) {
-  const { data: user, isLoading } = useGetMe();
+  const { data: user, isLoading, isFetching, isError, error } = useGetMe({
+    query: {
+      retry: (failureCount, err) => {
+        const status = (err as ApiError)?.status;
+        if (status === 503 || status === 502 || status === 504) return failureCount < 6;
+        if (status === 401) return false;
+        return failureCount < 2;
+      },
+      retryDelay: (attempt) => Math.min(2000 * (attempt + 1), 10000),
+    },
+  });
   const [, setLocation] = useLocation();
   const logout = useLogout();
   const [location] = useLocation();
   const [moreOpen, setMoreOpen] = useState(false);
 
+  const authStatus = isError ? (error as ApiError)?.status : undefined;
+  const waitingForApi = isLoading || isFetching || authStatus === 503 || authStatus === 502 || authStatus === 504;
+
   useEffect(() => {
-    if (!isLoading && !user) {
+    if (waitingForApi) return;
+    if (user) return;
+    if (authStatus === 401 || authStatus === 403) {
       clearAuthToken();
       setLocation("/login");
     }
-  }, [isLoading, user, setLocation]);
+  }, [waitingForApi, user, authStatus, setLocation]);
 
-  if (isLoading || !user) {
+  if (waitingForApi || !user) {
     return <div className="min-h-screen bg-background flex items-center justify-center"><Skeleton className="w-12 h-12 rounded-full" /></div>;
   }
 

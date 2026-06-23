@@ -10,14 +10,19 @@ if (!process.env.DATABASE_URL) {
   );
 }
 
+const connectionString = process.env.DATABASE_URL;
+const isLocalDb =
+  !connectionString ||
+  /localhost|127\.0\.0\.1/.test(connectionString);
+
 const poolConfig: pg.PoolConfig = {
-  connectionString: process.env.DATABASE_URL,
+  connectionString,
   max: 10,
   idleTimeoutMillis: 30_000,
-  connectionTimeoutMillis: 10_000,
+  connectionTimeoutMillis: 15_000,
 };
 
-if (process.env.NODE_ENV === "production") {
+if (!isLocalDb) {
   poolConfig.ssl = { rejectUnauthorized: false };
 }
 

@@ -10,13 +10,20 @@ export function parseIncomingContact(msg: proto.IWebMessageInfo): {
     return null;
   }
 
-  const key = msg.key as { remoteJidAlt?: string } | undefined;
+  const key = msg.key as { remoteJidAlt?: string; senderPn?: string } | undefined;
   const altJid = key?.remoteJidAlt;
   const phoneFromAlt = altJid ? jidToDisplayPhone(altJid) : null;
   const phoneFromMain = jidToDisplayPhone(remoteJid);
+  const phoneFromSenderPn = key?.senderPn ? jidToDisplayPhone(key.senderPn) : null;
 
   const userPart = remoteJid.split("@")[0].split(":")[0];
-  const phone = phoneFromAlt ?? phoneFromMain ?? `+${userPart.replace(/\D/g, "")}`;
+  const isLid = remoteJid.endsWith("@lid");
+  const fallback = isLid ? null : `+${userPart.replace(/\D/g, "")}`;
+  const phone = phoneFromAlt ?? phoneFromSenderPn ?? phoneFromMain ?? fallback;
+  if (!phone) {
+    if (isLid) return { whatsappJid: remoteJid, phone: "" };
+    return null;
+  }
 
   return { whatsappJid: remoteJid, phone };
 }

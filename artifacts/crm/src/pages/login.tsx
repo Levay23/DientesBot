@@ -12,7 +12,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Skeleton } from "@/components/ui/skeleton";
 import { motion } from "framer-motion";
 import ClinicLogo from "@/components/clinic-logo";
-import { saveAuthToken } from "@/lib/auth-token";
+import { saveAuthToken, getAuthToken } from "@/lib/auth-token";
 import type { ApiError } from "@workspace/api-client-react";
 
 
@@ -24,7 +24,17 @@ const loginSchema = z.object({
 type LoginFormValues = z.infer<typeof loginSchema>;
 
 export default function Login() {
-  const { data: user, isLoading: isLoadingUser } = useGetMe();
+  const { data: user, isLoading: isLoadingUser } = useGetMe({
+    query: {
+      enabled: !!getAuthToken(),
+      retry: (failureCount, err) => {
+        const status = (err as ApiError)?.status;
+        if (status === 503 || status === 502 || status === 504) return failureCount < 4;
+        return false;
+      },
+      retryDelay: (attempt) => Math.min(2000 * (attempt + 1), 8000),
+    },
+  });
   const [, setLocation] = useLocation();
   const loginMutation = useLogin();
   const { toast } = useToast();
@@ -52,36 +62,42 @@ export default function Login() {
   }
 
   const onSubmit = (values: LoginFormValues) => {
-    loginMutation.mutate(
-      { data: values },
-      {
-        onSuccess: (data: any) => {
-          // Save token for cross-origin Bearer auth
-          if (data?.token) saveAuthToken(data.token);
-          toast({ title: "Bienvenido", description: "Sesión iniciada correctamente." });
-          setLocation("/dashboard");
-        },
-        onError: (err: ApiError | Error) => {
-          const status = "status" in err ? err.status : undefined;
-          if (status === 401) {
+    const attemptLogin = (retriesLeft: number) => {
+      loginMutation.mutate(
+        { data: values },
+        {
+          onSuccess: (data: any) => {
+            if (data?.token) saveAuthToken(data.token);
+            toast({ title: "Bienvenido", description: "Sesión iniciada correctamente." });
+            setLocation("/dashboard");
+          },
+          onError: (err: ApiError | Error) => {
+            const status = "status" in err ? err.status : undefined;
+            if ((status === 503 || status === 502 || status === 504) && retriesLeft > 0) {
+              setTimeout(() => attemptLogin(retriesLeft - 1), 3000);
+              return;
+            }
+            if (status === 401) {
+              toast({
+                variant: "destructive",
+                title: "Error al iniciar sesión",
+                description: "Correo o contraseña incorrectos.",
+              });
+              return;
+            }
             toast({
               variant: "destructive",
-              title: "Error al iniciar sesión",
-              description: "Correo o contraseña incorrectos.",
+              title: "No se pudo conectar al servidor",
+              description:
+                status === 503
+                  ? "El servidor está despertando. Espera unos segundos e intenta de nuevo."
+                  : "El sistema no respondió. Verifica tu conexión o intenta de nuevo en unos minutos.",
             });
-            return;
-          }
-          toast({
-            variant: "destructive",
-            title: "No se pudo conectar al servidor",
-            description:
-              status === 503
-                ? "La base de datos no está disponible en este momento. Espera 1–2 minutos y vuelve a intentar."
-                : "El sistema no respondió. Verifica tu conexión o intenta de nuevo en unos minutos.",
-          });
+          },
         },
-      }
-    );
+      );
+    };
+    attemptLogin(3);
   };
 
 

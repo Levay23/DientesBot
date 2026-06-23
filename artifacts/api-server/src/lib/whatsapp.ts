@@ -40,6 +40,7 @@ function isAlreadyProcessed(msgId: string): boolean {
 }
 
 let sock: WASocket | null = null;
+let _startingWhatsApp = false;
 let _state: WAState = {
   connected: false,
   phone: null,
@@ -229,6 +230,26 @@ async function resolveOrCreateConversation(
   };
 }
 
+function messageTimestampMs(msg: proto.IWebMessageInfo): number | null {
+  const raw = msg.messageTimestamp;
+  if (raw == null) return null;
+  const n = typeof raw === "object" && raw !== null && "toNumber" in raw
+    ? (raw as { toNumber: () => number }).toNumber()
+    : Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n < 1_000_000_000_000 ? n * 1000 : n;
+}
+
+async function resolvePhoneForJid(whatsappJid: string, formattedPhone: string): Promise<string> {
+  const [byJid] = await db.select().from(conversationsTable)
+    .where(eq(conversationsTable.whatsappJid, whatsappJid))
+    .limit(1);
+  if (byJid?.phone && isValidColombianPhone(byJid.phone)) return byJid.phone;
+  if (formattedPhone && isValidColombianPhone(formattedPhone)) return formattedPhone;
+  if (byJid?.phone) return byJid.phone;
+  return formattedPhone;
+}
+
 async function handleIncomingMessage(msg: proto.IWebMessageInfo): Promise<void> {
   if (!msg.key) return;
 
@@ -237,6 +258,11 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo): Promise<void> 
 
   const fromMe = msg.key.fromMe === true;
   const msgId = msg.key.id ?? "";
+
+  if (!msg.message) {
+    logger.warn({ jid, msgId, fromMe }, "Mensaje WhatsApp sin contenido (sesión puede estar desincronizada)");
+    return;
+  }
 
   if (msgId && isAlreadyProcessed(msgId)) {
     logger.info({ msgId }, "Mensaje ya procesado, ignorando duplicado");
@@ -252,15 +278,27 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo): Promise<void> 
   }
 
   const contact = parseIncomingContact(msg);
-  if (!contact) return;
+  if (!contact) {
+    logger.warn({ jid, msgId }, "No se pudo resolver contacto del mensaje WhatsApp");
+    return;
+  }
 
-  const { whatsappJid, phone: formattedPhone } = contact;
+  const { whatsappJid } = contact;
+  const formattedPhone = await resolvePhoneForJid(whatsappJid, contact.phone);
+  if (!formattedPhone) {
+    logger.warn({ jid: whatsappJid, msgId }, "Teléfono no resuelto para mensaje WhatsApp");
+    return;
+  }
   const phone = formattedPhone.replace(/^\+/, "");
   const pushName = msg.pushName ?? formattedPhone;
 
   const globalBotEnabled = await syncBotEnabled();
   const [existingConv] = await db.select().from(conversationsTable)
-    .where(or(eq(conversationsTable.phone, formattedPhone), eq(conversationsTable.phone, phone)))
+    .where(or(
+      eq(conversationsTable.whatsappJid, whatsappJid),
+      eq(conversationsTable.phone, formattedPhone),
+      eq(conversationsTable.phone, phone),
+    ))
     .orderBy(sql`${conversationsTable.lastMessageAt} desc nulls last`);
 
   const shouldTranscribeAudio = !fromMe && globalBotEnabled && (!existingConv || existingConv.aiMode);
@@ -406,12 +444,23 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo): Promise<void> 
 }
 
 export async function startWhatsApp(): Promise<void> {
+  if (_startingWhatsApp) return;
+  _startingWhatsApp = true;
   _state.status = "connecting";
-  await syncBotEnabled();
 
-  const { state: authState, saveCreds } = await usePostgresAuthState();
+  try {
+    await syncBotEnabled();
 
-  sock = makeWASocket({
+    if (sock) {
+      try {
+        sock.end(new Error("restarting WhatsApp socket"));
+      } catch {}
+      sock = null;
+    }
+
+    const { state: authState, saveCreds } = await usePostgresAuthState();
+
+    sock = makeWASocket({
     auth: authState,
     printQRInTerminal: false,
     logger: logger.child({ module: "baileys" }) as any,
@@ -476,9 +525,21 @@ export async function startWhatsApp(): Promise<void> {
   });
 
   sock.ev.on("messages.upsert", async ({ messages, type }) => {
-    if (type !== "notify") return;
+    if (type !== "notify" && type !== "append" && type !== "prepend") return;
+
     for (const msg of messages) {
-      await handleIncomingMessage(msg);
+      if (type === "append" || type === "prepend") {
+        const ts = messageTimestampMs(msg);
+        if (ts && Date.now() - ts > 15 * 60 * 1000) continue;
+      }
+      try {
+        await handleIncomingMessage(msg);
+      } catch (err) {
+        logger.error({ err, type, jid: msg.key?.remoteJid }, "Error procesando messages.upsert");
+      }
     }
   });
+  } finally {
+    _startingWhatsApp = false;
+  }
 }
