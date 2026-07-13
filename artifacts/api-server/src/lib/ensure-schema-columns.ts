@@ -32,13 +32,6 @@ export async function ensureSchemaColumns(): Promise<void> {
     }
   }
 
-  await db.execute(sql`
-    CREATE UNIQUE INDEX IF NOT EXISTS settings_user_id_unique ON settings (user_id)
-  `);
-  await db.execute(sql`
-    CREATE UNIQUE INDEX IF NOT EXISTS ai_personality_user_id_unique ON ai_personality (user_id)
-  `);
-
   // Si había varias filas settings sin user_id, quedan duplicadas por usuario: conservar la menor id
   await db.execute(sql`
     DELETE FROM settings s
@@ -49,6 +42,13 @@ export async function ensureSchemaColumns(): Promise<void> {
     DELETE FROM ai_personality p
     USING ai_personality p2
     WHERE p.user_id = p2.user_id AND p.id > p2.id
+  `);
+
+  await db.execute(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS settings_user_id_unique ON settings (user_id)
+  `);
+  await db.execute(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS ai_personality_user_id_unique ON ai_personality (user_id)
   `);
 
   await db.execute(sql`
