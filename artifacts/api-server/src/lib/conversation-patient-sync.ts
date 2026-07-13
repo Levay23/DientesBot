@@ -42,17 +42,19 @@ export function phoneSearchVariants(phone: string): string[] {
   return [...variants];
 }
 
-export async function findPatientByPhone(phone: string) {
+export async function findPatientByPhone(phone: string, userId?: number) {
   const variants = phoneSearchVariants(phone);
   if (!variants.length) return null;
 
-  const conditions = variants.flatMap((v) => [
+  const phoneConditions = variants.flatMap((v) => [
     eq(patientsTable.phone, v),
     eq(patientsTable.phone, formatColombianPhone(v)),
   ]);
 
   const rows = await db.select().from(patientsTable)
-    .where(or(...conditions))
+    .where(userId
+      ? and(or(...phoneConditions), eq(patientsTable.userId, userId))
+      : or(...phoneConditions))
     .limit(1);
 
   return rows[0] ?? null;
@@ -70,6 +72,7 @@ export async function resolveConversationIdentity(
   waPhone: string,
   waPushName: string,
   existingPatientId?: number | null,
+  userId?: number,
 ): Promise<ConversationDisplay> {
   let patient = null;
 
@@ -79,7 +82,7 @@ export async function resolveConversationIdentity(
   }
 
   if (!patient && isValidColombianPhone(waPhone)) {
-    patient = await findPatientByPhone(waPhone);
+    patient = await findPatientByPhone(waPhone, userId);
   }
 
   if (patient) {
@@ -117,8 +120,13 @@ export async function syncConversationWithPatient(conversationId: number): Promi
 }
 
 /** Sincroniza todas las conversaciones con pacientes registrados. */
-export async function syncAllConversationsWithPatients(clinicPhone?: string | null): Promise<{ updated: number; linked: number }> {
-  const convs = await db.select().from(conversationsTable);
+export async function syncAllConversationsWithPatients(
+  clinicPhone?: string | null,
+  userId?: number,
+): Promise<{ updated: number; linked: number }> {
+  const convs = userId
+    ? await db.select().from(conversationsTable).where(eq(conversationsTable.userId, userId))
+    : await db.select().from(conversationsTable);
   let updated = 0;
   let linked = 0;
 
@@ -134,7 +142,7 @@ export async function syncAllConversationsWithPatients(clinicPhone?: string | nu
       continue;
     }
 
-    const identity = await resolveConversationIdentity(conv.phone, conv.patientName, conv.patientId);
+    const identity = await resolveConversationIdentity(conv.phone, conv.patientName, conv.patientId, userId);
 
     const needsUpdate =
       identity.patientId !== conv.patientId

@@ -1,4 +1,4 @@
-import { db, settingsTable, appointmentsTable } from "@workspace/db";
+import { db, settingsTable, appointmentsTable, patientsTable } from "@workspace/db";
 import { eq, and, sql } from "drizzle-orm";
 import { logger } from "./logger";
 import { addMinutes, APPOINTMENT_SLOT_INTERVAL_MINUTES } from "./appointment-time";
@@ -25,9 +25,9 @@ function getColombiaTime(): string {
 
 export type AvailableSlotDay = { label: string; slots: string[] };
 
-export async function getAvailableSlots(): Promise<AvailableSlotDay[]> {
+export async function getAvailableSlots(userId = 1): Promise<AvailableSlotDay[]> {
   try {
-    const [settings] = await db.select().from(settingsTable).limit(1);
+    const [settings] = await db.select().from(settingsTable).where(eq(settingsTable.userId, userId)).limit(1);
     const startHour = settings?.workingHoursStart ?? "08:00";
     const endHour = settings?.workingHoursEnd ?? "18:00";
     const duration = settings?.defaultAppointmentDuration ?? 60;
@@ -50,8 +50,13 @@ export async function getAvailableSlots(): Promise<AvailableSlotDay[]> {
 
       if (!workingDays.includes(weekday)) continue;
 
-      const existing = await db.select().from(appointmentsTable)
+      const existing = await db.select({
+        startTime: appointmentsTable.startTime,
+        endTime: appointmentsTable.endTime,
+      }).from(appointmentsTable)
+        .innerJoin(patientsTable, eq(appointmentsTable.patientId, patientsTable.id))
         .where(and(
+          eq(patientsTable.userId, userId),
           eq(appointmentsTable.date, dateStr),
           sql`${appointmentsTable.status} != 'cancelled'`,
         ));

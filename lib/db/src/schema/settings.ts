@@ -1,9 +1,11 @@
 import { pgTable, text, serial, integer, boolean } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
+import { usersTable } from "./users";
 
 export const settingsTable = pgTable("settings", {
   id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull().references(() => usersTable.id).default(1),
   clinicName: text("clinic_name").notNull().default("Dientes Fijos Medellín"),
   clinicPhone: text("clinic_phone"),
   clinicAddress: text("clinic_address"),

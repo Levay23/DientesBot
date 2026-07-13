@@ -12,6 +12,8 @@ import {
   ListAppointmentsQueryParams,
   GetAvailableSlotsQueryParams,
 } from "@workspace/api-zod";
+import { getUserId } from "../middleware/require-auth";
+import { getOwnedPatient, ensureSettingsForUser, tenantPatient, appointmentBelongsToUser } from "../lib/tenant";
 
 const router: IRouter = Router();
 
@@ -72,7 +74,7 @@ async function syncPatientStatus(patientId: number): Promise<void> {
 
 
 router.get("/appointments/available-slots", async (req, res): Promise<void> => {
-  // Parse date as string directly (query params are always strings; zod.date() would reject them)
+  const userId = getUserId(req);
   const dateStr = typeof req.query.date === "string" ? req.query.date : "";
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
     res.status(400).json({ error: "date must be a string in YYYY-MM-DD format" });
@@ -80,11 +82,15 @@ router.get("/appointments/available-slots", async (req, res): Promise<void> => {
   }
   const duration = req.query.duration ? parseInt(String(req.query.duration), 10) : 60;
 
-  const [settings] = await db.select().from(settingsTable).limit(1);
-  const startHour = settings?.workingHoursStart ?? "08:00";
-  const endHour = settings?.workingHoursEnd ?? "18:00";
-  const existing = await db.select().from(appointmentsTable)
-    .where(and(eq(appointmentsTable.date, dateStr), sql`${appointmentsTable.status} != 'cancelled'`));
+  const settings = await ensureSettingsForUser(userId);
+  const startHour = settings.workingHoursStart ?? "08:00";
+  const endHour = settings.workingHoursEnd ?? "18:00";
+  const existing = await db.select({
+    startTime: appointmentsTable.startTime,
+    endTime: appointmentsTable.endTime,
+  }).from(appointmentsTable)
+    .innerJoin(patientsTable, eq(appointmentsTable.patientId, patientsTable.id))
+    .where(and(tenantPatient(userId), eq(appointmentsTable.date, dateStr), sql`${appointmentsTable.status} != 'cancelled'`));
 
   const slots = [];
   let current = startHour;
@@ -99,8 +105,9 @@ router.get("/appointments/available-slots", async (req, res): Promise<void> => {
 });
 
 router.get("/appointments", async (req, res): Promise<void> => {
+  const userId = getUserId(req);
   const query = ListAppointmentsQueryParams.safeParse(req.query);
-  const conditions: ReturnType<typeof eq>[] = [];
+  const conditions = [tenantPatient(userId)];
   if (query.success) {
     if (query.data.date) {
       const d = query.data.date instanceof Date ? query.data.date.toISOString().slice(0, 10) : String(query.data.date);
@@ -126,24 +133,31 @@ router.get("/appointments", async (req, res): Promise<void> => {
     })
     .from(appointmentsTable)
     .innerJoin(patientsTable, eq(appointmentsTable.patientId, patientsTable.id))
-    .where(conditions.length ? and(...conditions) : undefined)
+    .where(and(...conditions))
     .orderBy(appointmentsTable.date, appointmentsTable.startTime);
 
   res.json(rows);
 });
 
 router.post("/appointments", async (req, res): Promise<void> => {
+  const userId = getUserId(req);
   const parsed = CreateAppointmentBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
 
   const { patientId, treatment, date: rawDate, startTime, duration, notes } = parsed.data;
+  const patient = await getOwnedPatient(userId, patientId);
+  if (!patient) { res.status(404).json({ error: "Patient not found" }); return; }
   const date = rawDate instanceof Date ? rawDate.toISOString().slice(0, 10) : String(rawDate);
   const endTime = addMinutes(startTime, duration ?? 60);
 
   try {
     const appt = await db.transaction(async (tx) => {
-      const conflict = await tx.select().from(appointmentsTable)
-        .where(and(eq(appointmentsTable.date, date), sql`${appointmentsTable.status} != 'cancelled'`));
+      const conflict = await tx.select({
+        startTime: appointmentsTable.startTime,
+        endTime: appointmentsTable.endTime,
+      }).from(appointmentsTable)
+        .innerJoin(patientsTable, eq(appointmentsTable.patientId, patientsTable.id))
+        .where(and(tenantPatient(userId), eq(appointmentsTable.date, date), sql`${appointmentsTable.status} != 'cancelled'`));
       const hasConflict = conflict.some(a => !(a.endTime <= startTime || a.startTime >= endTime));
       if (hasConflict) {
         throw new Error("Time slot conflict");
@@ -167,6 +181,7 @@ router.post("/appointments", async (req, res): Promise<void> => {
 });
 
 router.get("/appointments/:id", async (req, res): Promise<void> => {
+  const userId = getUserId(req);
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const params = GetAppointmentParams.safeParse({ id: parseInt(raw, 10) });
   if (!params.success) { res.status(400).json({ error: "Invalid id" }); return; }
@@ -183,17 +198,21 @@ router.get("/appointments/:id", async (req, res): Promise<void> => {
     notes: appointmentsTable.notes,
     createdAt: appointmentsTable.createdAt,
   }).from(appointmentsTable).innerJoin(patientsTable, eq(appointmentsTable.patientId, patientsTable.id))
-    .where(eq(appointmentsTable.id, params.data.id));
+    .where(and(eq(appointmentsTable.id, params.data.id), tenantPatient(userId)));
   if (!row) { res.status(404).json({ error: "Appointment not found" }); return; }
   res.json(row);
 });
 
 router.put("/appointments/:id", async (req, res): Promise<void> => {
+  const userId = getUserId(req);
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const params = UpdateAppointmentParams.safeParse({ id: parseInt(raw, 10) });
   if (!params.success) { res.status(400).json({ error: "Invalid id" }); return; }
   const parsed = UpdateAppointmentBody.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
+
+  const owned = await appointmentBelongsToUser(userId, params.data.id);
+  if (!owned) { res.status(404).json({ error: "Appointment not found" }); return; }
 
   const [previous] = await db.select().from(appointmentsTable).where(eq(appointmentsTable.id, params.data.id));
   if (!previous) { res.status(404).json({ error: "Appointment not found" }); return; }
@@ -227,16 +246,19 @@ router.put("/appointments/:id", async (req, res): Promise<void> => {
       patientName: patient.name,
       patientPhone: patient.phone,
       treatment: appt.treatment,
-    }).catch(() => undefined);
+    }, patient.userId).catch(() => undefined);
   }
 
   res.json({ ...appt, patientName: patient?.name ?? "", patientPhone: patient?.phone ?? "" });
 });
 
 router.delete("/appointments/:id", async (req, res): Promise<void> => {
+  const userId = getUserId(req);
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const params = DeleteAppointmentParams.safeParse({ id: parseInt(raw, 10) });
   if (!params.success) { res.status(400).json({ error: "Invalid id" }); return; }
+  const owned = await appointmentBelongsToUser(userId, params.data.id);
+  if (!owned) { res.status(404).json({ error: "Appointment not found" }); return; }
   const [deleted] = await db.delete(appointmentsTable).where(eq(appointmentsTable.id, params.data.id)).returning();
   if (!deleted) { res.status(404).json({ error: "Appointment not found" }); return; }
   

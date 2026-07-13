@@ -31,6 +31,7 @@ interface AIOptions {
   history?: { role: "user" | "assistant"; content: string }[];
   patientName?: string;
   testMode?: boolean;
+  userId?: number;
   availableSlots?: { label: string; slots: string[] }[];
 }
 
@@ -97,11 +98,18 @@ export async function generateAIResponse(
     return { message: MAINTENANCE_MESSAGE, actions: {} };
   }
   try {
+    let tenantUserId = opts.userId ?? 1;
+    if (conversationId && !opts.testMode) {
+      const [convForTenant] = await db.select().from(conversationsTable)
+        .where(eq(conversationsTable.id, conversationId)).limit(1);
+      if (convForTenant) tenantUserId = convForTenant.userId;
+    }
+
     const [settings, personality, knowledgeEntries, allTreatments] = await Promise.all([
-      db.select().from(settingsTable).limit(1),
-      db.select().from(aiPersonalityTable).limit(1),
-      db.select().from(aiKnowledgeTable).where(eq(aiKnowledgeTable.active, true)).orderBy(aiKnowledgeTable.category),
-      db.select().from(treatmentsTable).where(eq(treatmentsTable.active, true)),
+      db.select().from(settingsTable).where(eq(settingsTable.userId, tenantUserId)).limit(1),
+      db.select().from(aiPersonalityTable).where(eq(aiPersonalityTable.userId, tenantUserId)).limit(1),
+      db.select().from(aiKnowledgeTable).where(and(eq(aiKnowledgeTable.active, true), eq(aiKnowledgeTable.userId, tenantUserId))).orderBy(aiKnowledgeTable.category),
+      db.select().from(treatmentsTable).where(and(eq(treatmentsTable.active, true), eq(treatmentsTable.userId, tenantUserId))),
     ]);
 
     const cfg = settings[0];

@@ -2,9 +2,11 @@ import { pgTable, text, serial, timestamp, integer, boolean } from "drizzle-orm/
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { patientsTable } from "./patients";
+import { usersTable } from "./users";
 
 export const conversationsTable = pgTable("conversations", {
   id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull().references(() => usersTable.id).default(1),
   patientId: integer("patient_id").references(() => patientsTable.id, { onDelete: "set null" }),
   patientName: text("patient_name").notNull(),
   phone: text("phone").notNull(),

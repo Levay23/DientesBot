@@ -6,6 +6,8 @@ import { signedPaymentAmount, computeBalance, summarizePatientBilling } from "..
 import { getWhatsAppSock, getWAState, phoneToJid } from "../lib/whatsapp";
 import { generatePaymentReceiptImage } from "../lib/payment-receipt-image";
 import { logger } from "../lib/logger";
+import { getUserId } from "../middleware/require-auth";
+import { getOwnedPatient, getSettingsForUser, tenantPatient } from "../lib/tenant";
 
 const router: IRouter = Router();
 
@@ -118,15 +120,19 @@ async function getPaidByQuotation(quotationIds: number[]): Promise<Map<number, n
   return map;
 }
 
-router.get("/billing/summary", async (_req, res): Promise<void> => {
+router.get("/billing/summary", async (req, res): Promise<void> => {
+  const userId = getUserId(req);
   const today = colombiaToday();
   const monthStart = colombiaMonthStart();
 
-  const allPayments = await db.select().from(paymentsTable);
+  const allPayments = await db.select({ payment: paymentsTable })
+    .from(paymentsTable)
+    .innerJoin(patientsTable, eq(paymentsTable.patientId, patientsTable.id))
+    .where(tenantPatient(userId));
 
   let totalCollected = 0;
   let totalThisMonth = 0;
-  for (const p of allPayments) {
+  for (const { payment: p } of allPayments) {
     const signed = signedPaymentAmount(p.amount, p.paymentType);
     totalCollected += signed;
     if (normalizePaymentDate(p.paymentDate) >= monthStart) totalThisMonth += signed;
@@ -135,7 +141,9 @@ router.get("/billing/summary", async (_req, res): Promise<void> => {
   const quotes = await db.select({
     id: quotationsTable.id,
     total: quotationsTable.total,
-  }).from(quotationsTable);
+  }).from(quotationsTable)
+    .innerJoin(patientsTable, eq(quotationsTable.patientId, patientsTable.id))
+    .where(tenantPatient(userId));
 
   const paidMap = await getPaidByQuotation(quotes.map((q) => q.id));
   let outstandingBalance = 0;
@@ -149,9 +157,9 @@ router.get("/billing/summary", async (_req, res): Promise<void> => {
     }
   }
 
-  const todayPayments = allPayments.filter((p) => isCollectedOnColombiaDay(p.paymentDate, p.createdAt, today));
+  const todayPayments = allPayments.filter(({ payment: p }) => isCollectedOnColombiaDay(p.paymentDate, p.createdAt, today));
   const collectedToday = todayPayments.reduce(
-    (sum, p) => sum + signedPaymentAmount(p.amount, p.paymentType),
+    (sum, { payment: p }) => sum + signedPaymentAmount(p.amount, p.paymentType),
     0,
   );
 
@@ -166,13 +174,14 @@ router.get("/billing/summary", async (_req, res): Promise<void> => {
 });
 
 router.get("/billing/payments", async (req, res): Promise<void> => {
+  const userId = getUserId(req);
   const patientId = req.query.patientId ? parseInt(String(req.query.patientId), 10) : undefined;
   const quotationId = req.query.quotationId ? parseInt(String(req.query.quotationId), 10) : undefined;
   const fromDate = req.query.fromDate ? String(req.query.fromDate) : undefined;
   const toDate = req.query.toDate ? String(req.query.toDate) : undefined;
   const search = req.query.search ? String(req.query.search).trim() : undefined;
 
-  const conditions = [];
+  const conditions = [tenantPatient(userId)];
   if (patientId && !isNaN(patientId)) conditions.push(eq(paymentsTable.patientId, patientId));
   if (quotationId && !isNaN(quotationId)) conditions.push(eq(paymentsTable.quotationId, quotationId));
   if (fromDate) conditions.push(gte(paymentsTable.paymentDate, fromDate));
@@ -209,7 +218,7 @@ router.get("/billing/payments", async (req, res): Promise<void> => {
     .from(paymentsTable)
     .innerJoin(patientsTable, eq(paymentsTable.patientId, patientsTable.id))
     .leftJoin(quotationsTable, eq(paymentsTable.quotationId, quotationsTable.id))
-    .where(conditions.length ? and(...conditions) : undefined)
+    .where(and(...conditions))
     .orderBy(desc(paymentsTable.paymentDate), desc(paymentsTable.id));
 
   const quoteIds = [...new Set(rows.map((r) => r.quotationId).filter((id): id is number => id != null))];
@@ -229,13 +238,14 @@ router.get("/billing/payments", async (req, res): Promise<void> => {
 });
 
 router.get("/billing/patient/:patientId", async (req, res): Promise<void> => {
+  const userId = getUserId(req);
   const patientId = parseInt(req.params.patientId, 10);
   if (isNaN(patientId)) {
     res.status(400).json({ error: "ID de paciente inválido" });
     return;
   }
 
-  const [patient] = await db.select().from(patientsTable).where(eq(patientsTable.id, patientId)).limit(1);
+  const patient = await getOwnedPatient(userId, patientId);
   if (!patient) {
     res.status(404).json({ error: "Paciente no encontrado" });
     return;
@@ -302,6 +312,7 @@ router.get("/billing/patient/:patientId", async (req, res): Promise<void> => {
 });
 
 router.post("/billing/payments", async (req, res): Promise<void> => {
+  const userId = getUserId(req);
   const parsed = createPaymentSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.message });
@@ -309,6 +320,11 @@ router.post("/billing/payments", async (req, res): Promise<void> => {
   }
 
   const data = parsed.data;
+  const patient = await getOwnedPatient(userId, data.patientId);
+  if (!patient) {
+    res.status(404).json({ error: "Paciente no encontrado" });
+    return;
+  }
   if (data.quotationId) {
     const [quote] = await db
       .select()
@@ -341,6 +357,7 @@ router.post("/billing/payments", async (req, res): Promise<void> => {
 });
 
 router.patch("/billing/payments/:id", async (req, res): Promise<void> => {
+  const userId = getUserId(req);
   const id = parseInt(req.params.id, 10);
   if (isNaN(id)) {
     res.status(400).json({ error: "ID inválido" });
@@ -353,15 +370,20 @@ router.patch("/billing/payments/:id", async (req, res): Promise<void> => {
     return;
   }
 
-  const [existing] = await db.select().from(paymentsTable).where(eq(paymentsTable.id, id)).limit(1);
+  const [existing] = await db.select({ payment: paymentsTable })
+    .from(paymentsTable)
+    .innerJoin(patientsTable, eq(paymentsTable.patientId, patientsTable.id))
+    .where(and(eq(paymentsTable.id, id), tenantPatient(userId)))
+    .limit(1);
   if (!existing) {
     res.status(404).json({ error: "Pago no encontrado" });
     return;
   }
+  const existingPayment = existing.payment;
 
   const data = parsed.data;
   if (data.quotationId) {
-    const patientId = data.patientId ?? existing.patientId;
+    const patientId = data.patientId ?? existingPayment.patientId;
     const [quote] = await db
       .select()
       .from(quotationsTable)
@@ -393,36 +415,37 @@ router.patch("/billing/payments/:id", async (req, res): Promise<void> => {
 });
 
 router.post("/billing/payments/:id/send-whatsapp", async (req, res): Promise<void> => {
+  const userId = getUserId(req);
   const id = parseInt(req.params.id, 10);
   if (isNaN(id)) {
     res.status(400).json({ error: "ID inválido" });
     return;
   }
 
-  const [payment] = await db.select().from(paymentsTable).where(eq(paymentsTable.id, id)).limit(1);
-  if (!payment) {
+  const [row] = await db.select({ payment: paymentsTable, patient: patientsTable })
+    .from(paymentsTable)
+    .innerJoin(patientsTable, eq(paymentsTable.patientId, patientsTable.id))
+    .where(and(eq(paymentsTable.id, id), tenantPatient(userId)))
+    .limit(1);
+  if (!row) {
     res.status(404).json({ error: "Pago no encontrado" });
     return;
   }
-
-  const [patient] = await db
-    .select()
-    .from(patientsTable)
-    .where(eq(patientsTable.id, payment.patientId))
-    .limit(1);
+  const payment = row.payment;
+  const patient = row.patient;
   if (!patient?.phone?.trim()) {
     res.status(400).json({ error: "El paciente no tiene teléfono registrado para WhatsApp" });
     return;
   }
 
-  const waState = getWAState();
-  const sock = getWhatsAppSock();
+  const waState = getWAState(userId);
+  const sock = getWhatsAppSock(userId);
   if (!sock || !waState.connected) {
     res.status(503).json({ error: "WhatsApp no está conectado. Conéctalo en la sección WhatsApp." });
     return;
   }
 
-  const [settings] = await db.select().from(settingsTable).limit(1);
+  const settings = await getSettingsForUser(userId);
   const clinicName = settings?.clinicName ?? "Dientes Fijos Medellín";
   const clinicAddress = settings?.clinicAddress ?? null;
 
@@ -497,16 +520,22 @@ router.post("/billing/payments/:id/send-whatsapp", async (req, res): Promise<voi
 });
 
 router.delete("/billing/payments/:id", async (req, res): Promise<void> => {
+  const userId = getUserId(req);
   const id = parseInt(req.params.id, 10);
   if (isNaN(id)) {
     res.status(400).json({ error: "ID inválido" });
     return;
   }
-  const [deleted] = await db.delete(paymentsTable).where(eq(paymentsTable.id, id)).returning();
-  if (!deleted) {
+  const [existing] = await db.select({ payment: paymentsTable })
+    .from(paymentsTable)
+    .innerJoin(patientsTable, eq(paymentsTable.patientId, patientsTable.id))
+    .where(and(eq(paymentsTable.id, id), tenantPatient(userId)))
+    .limit(1);
+  if (!existing) {
     res.status(404).json({ error: "Pago no encontrado" });
     return;
   }
+  const [deleted] = await db.delete(paymentsTable).where(eq(paymentsTable.id, id)).returning();
   res.json({ message: "Pago eliminado" });
 });
 

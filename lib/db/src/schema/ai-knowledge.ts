@@ -1,9 +1,11 @@
-import { pgTable, text, serial, boolean, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, boolean, timestamp, integer } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
+import { usersTable } from "./users";
 
 export const aiKnowledgeTable = pgTable("ai_knowledge", {
   id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull().references(() => usersTable.id).default(1),
   title: text("title").notNull(),
   content: text("content").notNull(),
   category: text("category").notNull().default("general"),
@@ -15,6 +17,7 @@ export const aiKnowledgeTable = pgTable("ai_knowledge", {
 
 export const aiPersonalityTable = pgTable("ai_personality", {
   id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull().references(() => usersTable.id).default(1),
   name: text("name").notNull().default("Asistente Dientes Fijos"),
   role: text("role").notNull().default("Asistente virtual de la clínica dental Dientes Fijos Medellín"),
   mainGoal: text("main_goal").notNull().default("Ayudar a los pacientes con información, resolver dudas y agendar citas para tratamientos dentales"),

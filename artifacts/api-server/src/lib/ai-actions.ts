@@ -87,9 +87,11 @@ async function syncPatientStatusAfterChange(patientId: number): Promise<void> {
 async function resolvePatientId(
   current: ConversationRef,
   formattedPhone: string,
+  tenantUserId: number,
 ): Promise<number | null> {
   if (current.patientId) return current.patientId;
-  const [byPhone] = await db.select().from(patientsTable).where(eq(patientsTable.phone, formattedPhone));
+  const [byPhone] = await db.select().from(patientsTable)
+    .where(and(eq(patientsTable.phone, formattedPhone), eq(patientsTable.userId, tenantUserId)));
   return byPhone?.id ?? null;
 }
 
@@ -111,6 +113,7 @@ export interface ConversationRef {
   patientId: number | null;
   patientName: string | null;
   phone: string;
+  userId?: number;
 }
 
 export interface ProcessAIActionsResult {
@@ -126,6 +129,9 @@ export async function processAIActions(
   opts?: { patientMessage?: string },
 ): Promise<ProcessAIActionsResult> {
   let current = { ...conv };
+  const [convRow] = await db.select({ userId: conversationsTable.userId })
+    .from(conversationsTable).where(eq(conversationsTable.id, conv.id)).limit(1);
+  const tenantUserId = conv.userId ?? convRow?.userId ?? 1;
   let { registerPatient, bookAppointment, cancelAppointment, rescheduleAppointment, updatePhone, updateStatus } = actions;
   let bookingOutcome: BookingOutcome | null = null;
 
@@ -140,7 +146,8 @@ export async function processAIActions(
         ? (registerPatient.phone.startsWith("+") ? registerPatient.phone : `+${registerPatient.phone.replace(/\D/g, "")}`)
         : formattedPhone;
 
-      const existingByPhone = await db.select().from(patientsTable).where(eq(patientsTable.phone, contactPhone));
+      const existingByPhone = await db.select().from(patientsTable)
+        .where(and(eq(patientsTable.phone, contactPhone), eq(patientsTable.userId, tenantUserId)));
       let patientId: number;
 
       if (existingByPhone.length > 0) {
@@ -150,6 +157,7 @@ export async function processAIActions(
         }).where(eq(patientsTable.id, patientId));
       } else {
         const [newPatient] = await db.insert(patientsTable).values({
+          userId: tenantUserId,
           name: registerPatient.name,
           phone: contactPhone,
           treatment: registerPatient.treatment || "Consulta general",
@@ -220,7 +228,8 @@ export async function processAIActions(
     try {
       let patientId = current.patientId;
       if (!patientId) {
-        const [byPhone] = await db.select().from(patientsTable).where(eq(patientsTable.phone, formattedPhone));
+        const [byPhone] = await db.select().from(patientsTable)
+          .where(and(eq(patientsTable.phone, formattedPhone), eq(patientsTable.userId, tenantUserId)));
         patientId = byPhone?.id ?? null;
       }
       if (patientId) {
@@ -236,7 +245,8 @@ export async function processAIActions(
     try {
       let patientId = current.patientId;
       if (!patientId) {
-        const [byPhone] = await db.select().from(patientsTable).where(eq(patientsTable.phone, formattedPhone));
+        const [byPhone] = await db.select().from(patientsTable)
+          .where(and(eq(patientsTable.phone, formattedPhone), eq(patientsTable.userId, tenantUserId)));
         patientId = byPhone?.id ?? null;
       }
       if (patientId) {
@@ -256,7 +266,7 @@ export async function processAIActions(
 
   if (cancelAppointment?.appointmentId) {
     try {
-      const patientId = await resolvePatientId(current, formattedPhone);
+      const patientId = await resolvePatientId(current, formattedPhone, tenantUserId);
       if (!patientId) {
         logger.warn({ cancelAppointment }, "Cancelación rechazada: paciente no identificado");
       } else {
@@ -291,7 +301,7 @@ export async function processAIActions(
       if (!startTime) {
         logger.warn({ raw: rescheduleAppointment.startTime }, "Reagendamiento rechazado: hora inválida");
       } else {
-      const patientId = await resolvePatientId(current, formattedPhone);
+      const patientId = await resolvePatientId(current, formattedPhone, tenantUserId);
       if (!patientId) {
         logger.warn({ rescheduleAppointment }, "Reagendamiento rechazado: paciente no identificado");
       } else {
@@ -306,7 +316,7 @@ export async function processAIActions(
         logger.warn({ appointmentId: appt.id, status: appt.status }, "Reagendamiento rechazado: cita no activa");
       } else {
 
-      const [settings] = await db.select().from(settingsTable).limit(1);
+      const [settings] = await db.select().from(settingsTable).where(eq(settingsTable.userId, tenantUserId)).limit(1);
       const duration = settings?.defaultAppointmentDuration ?? 60;
       const endTime = addMinutes(startTime, duration);
       const newDate = rescheduleAppointment.date;
@@ -359,19 +369,22 @@ export async function processAIActions(
 
       let patientId = current.patientId;
       if (!patientId) {
-        const [existingByPhone] = await db.select().from(patientsTable).where(eq(patientsTable.phone, formattedPhone));
+        const [existingByPhone] = await db.select().from(patientsTable)
+          .where(and(eq(patientsTable.phone, formattedPhone), eq(patientsTable.userId, tenantUserId)));
         patientId = existingByPhone?.id ?? null;
       }
 
       if (!patientId && current.patientName?.trim()) {
         const cleanName = current.patientName.replace(/[^\p{L}\p{N}\s]/gu, "").trim() || current.patientName.trim();
-        const [existingByPhone] = await db.select().from(patientsTable).where(eq(patientsTable.phone, formattedPhone));
+        const [existingByPhone] = await db.select().from(patientsTable)
+          .where(and(eq(patientsTable.phone, formattedPhone), eq(patientsTable.userId, tenantUserId)));
         if (existingByPhone) {
           patientId = existingByPhone.id;
           await db.update(conversationsTable).set({ patientId }).where(eq(conversationsTable.id, current.id));
           current = { ...current, patientId };
         } else if (cleanName.length >= 2 && !/^\d+$/.test(cleanName)) {
           const [newPatient] = await db.insert(patientsTable).values({
+            userId: tenantUserId,
             name: cleanName,
             phone: formattedPhone,
             treatment: bookAppointment.treatment || "Consulta general",
@@ -388,7 +401,7 @@ export async function processAIActions(
       }
 
       if (patientId) {
-        const [settings] = await db.select().from(settingsTable).limit(1);
+        const [settings] = await db.select().from(settingsTable).where(eq(settingsTable.userId, tenantUserId)).limit(1);
         const duration = settings?.defaultAppointmentDuration ?? 60;
         const endTime = addMinutes(startTime, duration);
 

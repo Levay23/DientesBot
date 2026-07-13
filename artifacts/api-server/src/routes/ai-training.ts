@@ -1,18 +1,24 @@
 import { Router, type IRouter } from "express";
 import { db, aiKnowledgeTable, aiPersonalityTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { z } from "zod";
 import { generateAIResponse } from "../lib/groq";
 import { logger } from "../lib/logger";
+import { getUserId } from "../middleware/require-auth";
+import { ensurePersonalityForUser, tenantKnowledge } from "../lib/tenant";
 
 const router: IRouter = Router();
 
-router.get("/ai-training/knowledge", async (_req, res): Promise<void> => {
-  const entries = await db.select().from(aiKnowledgeTable).orderBy(aiKnowledgeTable.category, aiKnowledgeTable.createdAt);
+router.get("/ai-training/knowledge", async (req, res): Promise<void> => {
+  const userId = getUserId(req);
+  const entries = await db.select().from(aiKnowledgeTable)
+    .where(tenantKnowledge(userId))
+    .orderBy(aiKnowledgeTable.category, aiKnowledgeTable.createdAt);
   res.json(entries);
 });
 
 router.post("/ai-training/knowledge", async (req, res): Promise<void> => {
+  const userId = getUserId(req);
   const parsed = z.object({
     title: z.string().min(1),
     content: z.string().min(1),
@@ -24,11 +30,13 @@ router.post("/ai-training/knowledge", async (req, res): Promise<void> => {
   const [entry] = await db.insert(aiKnowledgeTable).values({
     ...parsed.data,
     source: "manual",
+    userId,
   }).returning();
   res.status(201).json(entry);
 });
 
 router.put("/ai-training/knowledge/:id", async (req, res): Promise<void> => {
+  const userId = getUserId(req);
   const id = parseInt(req.params.id as string, 10);
   const parsed = z.object({
     title: z.string().min(1).optional(),
@@ -39,19 +47,21 @@ router.put("/ai-training/knowledge/:id", async (req, res): Promise<void> => {
   if (!parsed.success) { res.status(400).json({ error: "Datos inválidos" }); return; }
   const [updated] = await db.update(aiKnowledgeTable)
     .set({ ...parsed.data, updatedAt: new Date() })
-    .where(eq(aiKnowledgeTable.id, id))
+    .where(and(eq(aiKnowledgeTable.id, id), tenantKnowledge(userId)))
     .returning();
   if (!updated) { res.status(404).json({ error: "Entrada no encontrada" }); return; }
   res.json(updated);
 });
 
 router.delete("/ai-training/knowledge/:id", async (req, res): Promise<void> => {
+  const userId = getUserId(req);
   const id = parseInt(req.params.id as string, 10);
-  await db.delete(aiKnowledgeTable).where(eq(aiKnowledgeTable.id, id));
+  await db.delete(aiKnowledgeTable).where(and(eq(aiKnowledgeTable.id, id), tenantKnowledge(userId)));
   res.json({ ok: true });
 });
 
 router.post("/ai-training/upload", async (req, res): Promise<void> => {
+  const userId = getUserId(req);
   const parsed = z.object({
     filename: z.string(),
     content: z.string().min(10, "Documento demasiado corto"),
@@ -87,21 +97,21 @@ router.post("/ai-training/upload", async (req, res): Promise<void> => {
       category: parsed.data.category,
       source: "upload",
       active: true,
+      userId,
     }).returning()
   ));
 
   res.status(201).json({ created: entries.length, entries: entries.map(e => e[0]) });
 });
 
-router.get("/ai-training/personality", async (_req, res): Promise<void> => {
-  let [personality] = await db.select().from(aiPersonalityTable).limit(1);
-  if (!personality) {
-    [personality] = await db.insert(aiPersonalityTable).values({}).returning();
-  }
+router.get("/ai-training/personality", async (req, res): Promise<void> => {
+  const userId = getUserId(req);
+  const personality = await ensurePersonalityForUser(userId);
   res.json(personality);
 });
 
 router.put("/ai-training/personality", async (req, res): Promise<void> => {
+  const userId = getUserId(req);
   const parsed = z.object({
     name: z.string().optional(),
     role: z.string().optional(),
@@ -117,18 +127,16 @@ router.put("/ai-training/personality", async (req, res): Promise<void> => {
   }).safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: "Datos inválidos" }); return; }
 
-  let [existing] = await db.select().from(aiPersonalityTable).limit(1);
-  if (!existing) {
-    [existing] = await db.insert(aiPersonalityTable).values({}).returning();
-  }
+  await ensurePersonalityForUser(userId);
   const [updated] = await db.update(aiPersonalityTable)
     .set({ ...parsed.data, updatedAt: new Date() })
-    .where(eq(aiPersonalityTable.id, existing.id))
+    .where(eq(aiPersonalityTable.userId, userId))
     .returning();
   res.json(updated);
 });
 
 router.post("/ai-training/test", async (req, res): Promise<void> => {
+  const userId = getUserId(req);
   const parsed = z.object({
     message: z.string().min(1),
     history: z.array(z.object({ role: z.enum(["user", "assistant"]), content: z.string() })).default([]),
@@ -141,6 +149,7 @@ router.post("/ai-training/test", async (req, res): Promise<void> => {
       history: parsed.data.history,
       patientName: parsed.data.patientName,
       testMode: true,
+      userId,
     });
     res.json({ response: result.message });
   } catch (err) {

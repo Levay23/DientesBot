@@ -39,49 +39,54 @@ function isAlreadyProcessed(msgId: string): boolean {
   return false;
 }
 
-let sock: WASocket | null = null;
-let _startingWhatsApp = false;
-let _state: WAState = {
-  connected: false,
-  phone: null,
-  connectedAt: null,
-  status: "disconnected",
-  qrDataUrl: null,
-  botEnabled: true,
-};
+type WaInstance = { sock: WASocket | null; state: WAState; starting: boolean };
 
-export const getWhatsAppSock = () => sock;
-export const getWhatsAppStatus = () => _state.status;
-
-export function getWAState(): WAState {
-  return { ..._state };
+function defaultWaState(): WAState {
+  return { connected: false, phone: null, connectedAt: null, status: "disconnected", qrDataUrl: null, botEnabled: true };
 }
 
-export async function syncBotEnabled(enabled?: boolean): Promise<boolean> {
+const waInstances = new Map<number, WaInstance>();
+
+function getWa(userId: number): WaInstance {
+  if (!waInstances.has(userId)) {
+    waInstances.set(userId, { sock: null, state: defaultWaState(), starting: false });
+  }
+  return waInstances.get(userId)!;
+}
+
+export const getWhatsAppSock = (userId = 1) => getWa(userId).sock;
+export const getWhatsAppStatus = (userId = 1) => getWa(userId).state.status;
+
+export function getWAState(userId = 1): WAState {
+  return { ...getWa(userId).state };
+}
+
+export async function syncBotEnabled(userId = 1, enabled?: boolean): Promise<boolean> {
+  const inst = getWa(userId);
   try {
     if (typeof enabled === "boolean") {
-      await db.update(settingsTable).set({ aiBotEnabled: enabled });
-      _state.botEnabled = enabled;
+      await db.update(settingsTable).set({ aiBotEnabled: enabled }).where(eq(settingsTable.userId, userId));
+      inst.state.botEnabled = enabled;
       return enabled;
     }
-    const [settings] = await db.select().from(settingsTable).limit(1);
+    const [settings] = await db.select().from(settingsTable).where(eq(settingsTable.userId, userId)).limit(1);
     if (settings && typeof settings.aiBotEnabled === "boolean") {
-      _state.botEnabled = settings.aiBotEnabled;
+      inst.state.botEnabled = settings.aiBotEnabled;
       return settings.aiBotEnabled;
     }
   } catch (err) {
-    logger.error({ err }, "Error sincronizando botEnabled con DB");
+    logger.error({ err, userId }, "Error sincronizando botEnabled con DB");
   }
-  return _state.botEnabled;
+  return inst.state.botEnabled;
 }
 
-export function getBotEnabled(): boolean {
-  return _state.botEnabled;
+export function getBotEnabled(userId = 1): boolean {
+  return getWa(userId).state.botEnabled;
 }
 
-export async function setBotEnabled(enabled: boolean): Promise<void> {
-  await syncBotEnabled(enabled);
-  logger.info({ botEnabled: enabled }, "Bot IA global actualizado y persistido");
+export async function setBotEnabled(userId: number, enabled: boolean): Promise<void> {
+  await syncBotEnabled(userId, enabled);
+  logger.info({ botEnabled: enabled, userId }, "Bot IA actualizado y persistido");
 }
 
 export function phoneToJid(phone: string): string {
@@ -92,15 +97,16 @@ export function phoneToJid(phone: string): string {
   return `${finalPhone}@s.whatsapp.net`;
 }
 
-export async function sendWAMessage(jid: string, text: string): Promise<boolean> {
+export async function sendWAMessage(jid: string, text: string, userId = 1): Promise<boolean> {
   if (isSystemMaintenance()) {
     logger.info({ jid }, "Modo mantenimiento: envío WhatsApp bloqueado");
     return false;
   }
-  if (!sock || !_state.connected) return false;
+  const inst = getWa(userId);
+  if (!inst.sock || !inst.state.connected) return false;
   if (!jid?.includes("@")) return false;
   try {
-    await sock.sendMessage(jid, { text });
+    await inst.sock.sendMessage(jid, { text });
     return true;
   } catch (err) {
     logger.error({ err, jid }, "Error enviando mensaje WhatsApp");
@@ -109,7 +115,7 @@ export async function sendWAMessage(jid: string, text: string): Promise<boolean>
 }
 
 export async function sendMessageToConversation(
-  conv: { whatsappJid?: string | null; phone: string },
+  conv: { userId?: number; whatsappJid?: string | null; phone: string },
   text: string,
   patientPhone?: string | null,
 ): Promise<boolean> {
@@ -118,7 +124,7 @@ export async function sendMessageToConversation(
     logger.warn({ phone: conv.phone, whatsappJid: conv.whatsappJid }, "No se pudo resolver JID de WhatsApp");
     return false;
   }
-  return sendWAMessage(jid, text);
+  return sendWAMessage(jid, text, conv.userId ?? 1);
 }
 
 export async function sendMessageToPhone(phone: string, text: string): Promise<boolean> {
@@ -127,23 +133,17 @@ export async function sendMessageToPhone(phone: string, text: string): Promise<b
   return sendWAMessage(jid, text);
 }
 
-export async function disconnectWA(): Promise<void> {
-  if (sock) {
-    try { await sock.logout(); } catch {}
-    sock = null;
+export async function disconnectWA(userId = 1): Promise<void> {
+  const inst = getWa(userId);
+  if (inst.sock) {
+    try { await inst.sock.logout(); } catch {}
+    inst.sock = null;
   }
   try {
-    const { clearAuth } = await usePostgresAuthState();
+    const { clearAuth } = await usePostgresAuthState(userId);
     await clearAuth();
   } catch {}
-  _state = {
-    connected: false,
-    phone: null,
-    connectedAt: null,
-    status: "disconnected",
-    qrDataUrl: null,
-    botEnabled: _state.botEnabled,
-  };
+  inst.state = { ...defaultWaState(), botEnabled: inst.state.botEnabled };
 }
 
 async function findMessageByWhatsappId(whatsappMsgId: string) {
@@ -177,21 +177,26 @@ async function resolveOrCreateConversation(
   formattedPhone: string,
   phone: string,
   pushName: string,
+  ownerUserId: number,
 ) {
-  const identity = await resolveConversationIdentity(formattedPhone, pushName);
+  const identity = await resolveConversationIdentity(formattedPhone, pushName, undefined, ownerUserId);
 
   const allConvs = await db.select().from(conversationsTable)
-    .where(or(
-      eq(conversationsTable.whatsappJid, whatsappJid),
-      eq(conversationsTable.phone, identity.phone),
-      eq(conversationsTable.phone, formattedPhone),
-      eq(conversationsTable.phone, phone),
+    .where(and(
+      eq(conversationsTable.userId, ownerUserId),
+      or(
+        eq(conversationsTable.whatsappJid, whatsappJid),
+        eq(conversationsTable.phone, identity.phone),
+        eq(conversationsTable.phone, formattedPhone),
+        eq(conversationsTable.phone, phone),
+      ),
     ))
     .orderBy(sql`${conversationsTable.lastMessageAt} desc nulls last`);
 
   let conv;
   if (allConvs.length === 0) {
     [conv] = await db.insert(conversationsTable).values({
+      userId: ownerUserId,
       patientId: identity.patientId,
       patientName: identity.patientName,
       phone: identity.phoneIsValid ? identity.phone : formattedPhone,
@@ -219,6 +224,7 @@ async function resolveOrCreateConversation(
     isValidColombianPhone(formattedPhone) ? formattedPhone : conv.phone,
     pushName,
     conv.patientId ?? identity.patientId,
+    ownerUserId,
   );
 
   return {
@@ -250,7 +256,9 @@ async function resolvePhoneForJid(whatsappJid: string, formattedPhone: string): 
   return formattedPhone;
 }
 
-async function handleIncomingMessage(msg: proto.IWebMessageInfo): Promise<void> {
+async function handleIncomingMessage(msg: proto.IWebMessageInfo, ownerUserId: number): Promise<void> {
+  const inst = getWa(ownerUserId);
+  const waSock = inst.sock;
   if (!msg.key) return;
 
   const jid = msg.key.remoteJid ?? "";
@@ -292,18 +300,21 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo): Promise<void> 
   const phone = formattedPhone.replace(/^\+/, "");
   const pushName = msg.pushName ?? formattedPhone;
 
-  const globalBotEnabled = await syncBotEnabled();
+  const globalBotEnabled = await syncBotEnabled(ownerUserId);
   const [existingConv] = await db.select().from(conversationsTable)
-    .where(or(
-      eq(conversationsTable.whatsappJid, whatsappJid),
-      eq(conversationsTable.phone, formattedPhone),
-      eq(conversationsTable.phone, phone),
+    .where(and(
+      eq(conversationsTable.userId, ownerUserId),
+      or(
+        eq(conversationsTable.whatsappJid, whatsappJid),
+        eq(conversationsTable.phone, formattedPhone),
+        eq(conversationsTable.phone, phone),
+      ),
     ))
     .orderBy(sql`${conversationsTable.lastMessageAt} desc nulls last`);
 
   const shouldTranscribeAudio = !fromMe && globalBotEnabled && (!existingConv || existingConv.aiMode);
 
-  const parsed = await parseWhatsAppMessage(msg, sock, { transcribeAudio: shouldTranscribeAudio });
+  const parsed = await parseWhatsAppMessage(msg, waSock, { transcribeAudio: shouldTranscribeAudio });
   if (!parsed?.text.trim() && !parsed?.mediaData) return;
 
   const text = parsed.text.trim() || (parsed.mediaData ? parsed.text : "");
@@ -312,7 +323,7 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo): Promise<void> 
   logger.info({ jid, fromMe, text, messageType: parsed.messageType }, "Mensaje de WhatsApp recibido");
 
   try {
-    let conv = await resolveOrCreateConversation(whatsappJid, formattedPhone, phone, pushName);
+    let conv = await resolveOrCreateConversation(whatsappJid, formattedPhone, phone, pushName, ownerUserId);
 
     if (fromMe) {
       const dupAgent = await findRecentDuplicateMessage(conv.id, "agent", text);
@@ -369,8 +380,8 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo): Promise<void> 
 
     let aiText = "";
     try {
-      const availableSlots = await getAvailableSlots();
-      const aiResult = await generateAIResponse(conv.id, text, { availableSlots });
+      const availableSlots = await getAvailableSlots(ownerUserId);
+      const aiResult = await generateAIResponse(conv.id, text, { availableSlots, userId: ownerUserId });
 
       try {
         const { conversation: updatedConv, bookingOutcome } = await processAIActions(
@@ -379,6 +390,7 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo): Promise<void> 
             patientId: conv.patientId,
             patientName: conv.patientName,
             phone: formattedPhone,
+            userId: ownerUserId,
           },
           formattedPhone,
           aiResult.actions,
@@ -415,27 +427,27 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo): Promise<void> 
       }).where(eq(conversationsTable.id, conv.id));
 
       const outboundJid = conv.whatsappJid ?? whatsappJid;
-      if (sock && outboundJid) {
-        logger.info({ jid: outboundJid, status: _state.status, wasAudio: parsed.wasAudio }, "Intentando enviar respuesta IA a WhatsApp...");
+      if (waSock && outboundJid) {
+        logger.info({ jid: outboundJid, status: inst.state.status, wasAudio: parsed.wasAudio }, "Intentando enviar respuesta IA a WhatsApp...");
         try {
           if (parsed.wasAudio) {
             logger.info({ jid: outboundJid }, "Sintetizando audio (TTS) para responder nota de voz");
             const audioResponse = await synthesizeAudio(aiText);
-            await sock.sendMessage(outboundJid, {
+            await waSock.sendMessage(outboundJid, {
               audio: audioResponse.buffer,
               mimetype: audioResponse.mimetype,
               ptt: true,
             });
             logger.info({ jid: outboundJid, mimetype: audioResponse.mimetype }, "Respuesta IA enviada exitosamente como nota de voz");
           } else {
-            await sock.sendMessage(outboundJid, { text: aiText });
+            await waSock.sendMessage(outboundJid, { text: aiText });
             logger.info({ jid: outboundJid, aiText }, "Respuesta IA enviada exitosamente como texto");
           }
         } catch (wsErr) {
           logger.error({ wsErr, jid: outboundJid }, "Error al enviar mensaje a través de WhatsApp Socket");
         }
       } else {
-        logger.error({ jid: outboundJid, status: _state.status }, "CRÍTICO: No se pudo enviar mensaje (sock o JID inválido)");
+        logger.error({ jid: outboundJid, status: inst.state.status }, "CRÍTICO: No se pudo enviar mensaje (sock o JID inválido)");
       }
     }
   } catch (err) {
@@ -443,27 +455,28 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo): Promise<void> 
   }
 }
 
-export async function startWhatsApp(): Promise<void> {
-  if (_startingWhatsApp) return;
-  _startingWhatsApp = true;
-  _state.status = "connecting";
+export async function startWhatsApp(userId = 1): Promise<void> {
+  const inst = getWa(userId);
+  if (inst.starting) return;
+  inst.starting = true;
+  inst.state.status = "connecting";
 
   try {
-    await syncBotEnabled();
+    await syncBotEnabled(userId);
 
-    if (sock) {
+    if (inst.sock) {
       try {
-        sock.end(new Error("restarting WhatsApp socket"));
+        inst.sock.end(new Error("restarting WhatsApp socket"));
       } catch {}
-      sock = null;
+      inst.sock = null;
     }
 
-    const { state: authState, saveCreds } = await usePostgresAuthState();
+    const { state: authState, saveCreds } = await usePostgresAuthState(userId);
 
-    sock = makeWASocket({
+    inst.sock = makeWASocket({
     auth: authState,
     printQRInTerminal: false,
-    logger: logger.child({ module: "baileys" }) as any,
+    logger: logger.child({ module: "baileys", userId }) as any,
     browser: ["Dientes Fijos", "Chrome", "120.0.0"],
     connectTimeoutMs: 60000,
     defaultQueryTimeoutMs: 60000,
@@ -474,16 +487,16 @@ export async function startWhatsApp(): Promise<void> {
     markOnlineOnConnect: false,
   });
 
-  sock.ev.on("creds.update", saveCreds);
+  inst.sock.ev.on("creds.update", saveCreds);
 
-  sock.ev.on("connection.update", async (update) => {
+  inst.sock.ev.on("connection.update", async (update) => {
     const { connection, lastDisconnect, qr } = update;
 
     if (qr) {
       try {
-        _state.qrDataUrl = await QRCode.toDataURL(qr, { width: 300, margin: 2 });
-        _state.status = "waiting_qr";
-        logger.info("QR de WhatsApp generado");
+        inst.state.qrDataUrl = await QRCode.toDataURL(qr, { width: 300, margin: 2 });
+        inst.state.status = "waiting_qr";
+        logger.info({ userId }, "QR de WhatsApp generado");
       } catch (err) {
         logger.error({ err }, "Error generando QR");
       }
@@ -492,27 +505,27 @@ export async function startWhatsApp(): Promise<void> {
     if (connection === "close") {
       const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
       const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-      const prevBotEnabled = _state.botEnabled;
+      const prevBotEnabled = inst.state.botEnabled;
 
-      _state.connected = false;
-      _state.qrDataUrl = null;
-      _state.status = "disconnected";
-      _state.botEnabled = prevBotEnabled;
+      inst.state.connected = false;
+      inst.state.qrDataUrl = null;
+      inst.state.status = "disconnected";
+      inst.state.botEnabled = prevBotEnabled;
 
       if (shouldReconnect) {
-        logger.info({ statusCode }, "WhatsApp desconectado, reconectando...");
-        setTimeout(() => startWhatsApp(), 3000);
+        logger.info({ statusCode, userId }, "WhatsApp desconectado, reconectando...");
+        setTimeout(() => startWhatsApp(userId), 3000);
       } else {
-        logger.info("WhatsApp cerro sesion (loggedOut)");
-        usePostgresAuthState().then(({ clearAuth }) => clearAuth()).catch(() => {});
-        _state = { connected: false, phone: null, connectedAt: null, status: "disconnected", qrDataUrl: null, botEnabled: prevBotEnabled };
+        logger.info({ userId }, "WhatsApp cerro sesion (loggedOut)");
+        usePostgresAuthState(userId).then(({ clearAuth }) => clearAuth()).catch(() => {});
+        inst.state = { ...defaultWaState(), botEnabled: prevBotEnabled };
       }
     }
 
     if (connection === "open") {
-      const phone = sock?.user?.id?.split(":")[0] ?? sock?.user?.id ?? "desconocido";
-      const prevBotEnabled = _state.botEnabled;
-      _state = {
+      const phone = inst.sock?.user?.id?.split(":")[0] ?? inst.sock?.user?.id ?? "desconocido";
+      const prevBotEnabled = inst.state.botEnabled;
+      inst.state = {
         connected: true,
         phone: phone.startsWith("+") ? phone : `+${phone}`,
         connectedAt: new Date(),
@@ -520,11 +533,11 @@ export async function startWhatsApp(): Promise<void> {
         qrDataUrl: null,
         botEnabled: prevBotEnabled,
       };
-      logger.info({ phone: _state.phone }, "WhatsApp conectado exitosamente");
+      logger.info({ phone: inst.state.phone, userId }, "WhatsApp conectado exitosamente");
     }
   });
 
-  sock.ev.on("messages.upsert", async ({ messages, type }) => {
+  inst.sock.ev.on("messages.upsert", async ({ messages, type }) => {
     if (type !== "notify" && type !== "append" && type !== "prepend") return;
 
     for (const msg of messages) {
@@ -533,13 +546,13 @@ export async function startWhatsApp(): Promise<void> {
         if (ts && Date.now() - ts > 15 * 60 * 1000) continue;
       }
       try {
-        await handleIncomingMessage(msg);
+        await handleIncomingMessage(msg, userId);
       } catch (err) {
-        logger.error({ err, type, jid: msg.key?.remoteJid }, "Error procesando messages.upsert");
+        logger.error({ err, type, jid: msg.key?.remoteJid, userId }, "Error procesando messages.upsert");
       }
     }
   });
   } finally {
-    _startingWhatsApp = false;
+    inst.starting = false;
   }
 }

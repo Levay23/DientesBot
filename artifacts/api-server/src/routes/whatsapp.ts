@@ -1,5 +1,6 @@
 import { Router, type IRouter } from "express";
 import { getWAState, sendWAMessage, phoneToJid, disconnectWA, getBotEnabled, setBotEnabled, startWhatsApp } from "../lib/whatsapp";
+import { getUserId } from "../middleware/require-auth";
 
 const router: IRouter = Router();
 
@@ -10,8 +11,9 @@ const noCache = (_req: any, res: any, next: any) => {
   next();
 };
 
-router.get("/whatsapp/status", noCache, (_req, res): void => {
-  const state = getWAState();
+router.get("/whatsapp/status", noCache, (req, res): void => {
+  const userId = getUserId(req);
+  const state = getWAState(userId);
   res.json({
     connected: state.connected,
     phone: state.phone,
@@ -21,8 +23,9 @@ router.get("/whatsapp/status", noCache, (_req, res): void => {
   });
 });
 
-router.get("/whatsapp/qr", noCache, (_req, res): void => {
-  const state = getWAState();
+router.get("/whatsapp/qr", noCache, (req, res): void => {
+  const userId = getUserId(req);
+  const state = getWAState(userId);
   if (state.connected) {
     res.json({ qrCode: null, status: "connected" });
     return;
@@ -33,38 +36,42 @@ router.get("/whatsapp/qr", noCache, (_req, res): void => {
   });
 });
 
-router.get("/whatsapp/bot-status", (_req, res): void => {
-  res.json({ botEnabled: getBotEnabled() });
+router.get("/whatsapp/bot-status", (req, res): void => {
+  res.json({ botEnabled: getBotEnabled(getUserId(req)) });
 });
 
 router.post("/whatsapp/bot-toggle", async (req, res): Promise<void> => {
+  const userId = getUserId(req);
   const { enabled } = req.body as { enabled?: boolean };
-  const newState = typeof enabled === "boolean" ? enabled : !getBotEnabled();
-  await setBotEnabled(newState);
+  const newState = typeof enabled === "boolean" ? enabled : !getBotEnabled(userId);
+  await setBotEnabled(userId, newState);
   res.json({ botEnabled: newState });
 });
 
-router.post("/whatsapp/disconnect", async (_req, res): Promise<void> => {
-  await disconnectWA();
-  setTimeout(() => { startWhatsApp().catch(() => {}); }, 1500);
+router.post("/whatsapp/disconnect", async (req, res): Promise<void> => {
+  const userId = getUserId(req);
+  await disconnectWA(userId);
+  setTimeout(() => { startWhatsApp(userId).catch(() => {}); }, 1500);
   res.json({ ok: true });
 });
 
-router.post("/whatsapp/reconnect", async (_req, res): Promise<void> => {
-  const state = getWAState();
+router.post("/whatsapp/reconnect", async (req, res): Promise<void> => {
+  const userId = getUserId(req);
+  const state = getWAState(userId);
   if (state.status === "disconnected") {
-    setTimeout(() => { startWhatsApp().catch(() => {}); }, 500);
+    setTimeout(() => { startWhatsApp(userId).catch(() => {}); }, 500);
   }
   res.json({ ok: true, status: state.status });
 });
 
 router.post("/whatsapp/send", async (req, res): Promise<void> => {
+  const userId = getUserId(req);
   const { phone, message } = req.body as { phone: string; message: string };
   if (!phone || !message) {
     res.status(400).json({ error: "Se requiere phone y message" });
     return;
   }
-  const ok = await sendWAMessage(phoneToJid(phone), message);
+  const ok = await sendWAMessage(phoneToJid(phone), message, userId);
   res.json({ ok });
 });
 

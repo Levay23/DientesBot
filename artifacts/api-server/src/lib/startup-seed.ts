@@ -1,5 +1,5 @@
 import { db, usersTable, aiKnowledgeTable, aiPersonalityTable, appointmentsTable, patientsTable, settingsTable } from "@workspace/db";
-import { eq, sql, ilike, or } from "drizzle-orm";
+import { eq, sql, ilike, or, and } from "drizzle-orm";
 import { logger } from "./logger";
 import { ensureTreatmentsCatalog } from "./treatments-catalog";
 import { ensurePaymentsTable } from "./ensure-payments-table";
@@ -166,8 +166,9 @@ const PERSONALITY = {
 
 async function ensureClinicAddressInDatabase(): Promise<void> {
   const generalContent = buildGeneralKnowledgeContent();
+  const ADMIN_USER_ID = 1;
 
-  const [settings] = await db.select().from(settingsTable).limit(1);
+  const [settings] = await db.select().from(settingsTable).where(eq(settingsTable.userId, ADMIN_USER_ID)).limit(1);
   if (settings) {
     const addr = settings.clinicAddress?.trim() ?? "";
     if (!isCanonicalClinicAddress(addr)) {
@@ -183,9 +184,12 @@ async function ensureClinicAddressInDatabase(): Promise<void> {
     .select()
     .from(aiKnowledgeTable)
     .where(
-      or(
-        ilike(aiKnowledgeTable.title, "%informacion general%"),
-        ilike(aiKnowledgeTable.title, "%información general%"),
+      and(
+        eq(aiKnowledgeTable.userId, ADMIN_USER_ID),
+        or(
+          ilike(aiKnowledgeTable.title, "%informacion general%"),
+          ilike(aiKnowledgeTable.title, "%información general%"),
+        ),
       ),
     )
     .limit(1);
@@ -200,7 +204,7 @@ async function ensureClinicAddressInDatabase(): Promise<void> {
     }
   }
 
-  const [personality] = await db.select().from(aiPersonalityTable).limit(1);
+  const [personality] = await db.select().from(aiPersonalityTable).where(eq(aiPersonalityTable.userId, ADMIN_USER_ID)).limit(1);
   if (personality && !personality.extraInstructions?.includes("Calle 51")) {
     await db
       .update(aiPersonalityTable)
@@ -216,6 +220,7 @@ export async function runStartupSeed(): Promise<void> {
   try {
     // ── Admin user ─────────────────────────────────────────────────────────
     const adminEmail = "admin@dientesfijosmedellin.com";
+    const adminUserId = 1;
     const [existingUser] = await db.select().from(usersTable).where(eq(usersTable.email, adminEmail));
     if (!existingUser) {
       await db.insert(usersTable).values({
@@ -227,24 +232,24 @@ export async function runStartupSeed(): Promise<void> {
       logger.info("Admin user created");
     }
 
-    // ── AI Knowledge — always refresh ────────────────────────────────────
-    const existing = await db.select().from(aiKnowledgeTable);
+    // ── AI Knowledge — solo para admin (user 1) ────────────────────────────
+    const existing = await db.select().from(aiKnowledgeTable).where(eq(aiKnowledgeTable.userId, adminUserId));
     if (existing.length === 0) {
       for (const entry of KNOWLEDGE) {
-        await db.insert(aiKnowledgeTable).values({ ...entry, source: "seed", active: true });
+        await db.insert(aiKnowledgeTable).values({ ...entry, source: "seed", active: true, userId: adminUserId });
       }
-      logger.info({ count: KNOWLEDGE.length }, "AI knowledge seeded");
+      logger.info({ count: KNOWLEDGE.length }, "AI knowledge seeded for admin");
     } else {
-      logger.info({ count: existing.length }, "AI knowledge already present");
+      logger.info({ count: existing.length }, "AI knowledge already present for admin");
     }
 
-    // ── AI Personality ────────────────────────────────────────────────────
-    const [existingP] = await db.select().from(aiPersonalityTable);
+    // ── AI Personality — solo admin ────────────────────────────────────────
+    const [existingP] = await db.select().from(aiPersonalityTable).where(eq(aiPersonalityTable.userId, adminUserId));
     if (!existingP) {
-      await db.insert(aiPersonalityTable).values(PERSONALITY);
-      logger.info("AI personality created");
+      await db.insert(aiPersonalityTable).values({ ...PERSONALITY, userId: adminUserId });
+      logger.info("AI personality created for admin");
     } else {
-      logger.info("AI personality already present (no se sobrescribe desde seed)");
+      logger.info("AI personality already present for admin (no se sobrescribe desde seed)");
     }
 
     await ensureClinicAddressInDatabase();

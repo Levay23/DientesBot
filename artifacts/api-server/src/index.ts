@@ -42,14 +42,14 @@ app.listen(port, (err) => {
   });
 
   setTimeout(() => {
-    const wa = getWAState();
-    syncAllConversationsWithPatients(wa.phone).catch((err) => {
+    const wa = getWAState(1);
+    syncAllConversationsWithPatients(wa.phone, 1).catch((err) => {
       logger.error({ err }, "Error sincronizando conversaciones con pacientes");
     });
   }, 15000);
 
-  // Iniciar WhatsApp Web (Baileys) en background
-  startWhatsApp().catch((err) => {
+  // Iniciar WhatsApp Web (Baileys) en background — sesión del admin (user 1)
+  startWhatsApp(1).catch((err) => {
     logger.error({ err }, "Error iniciando WhatsApp");
   });
 

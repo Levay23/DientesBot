@@ -1,35 +1,41 @@
 import { initAuthCreds, BufferJSON, type AuthenticationState, type SignalDataSet, type SignalDataTypeMap } from "@whiskeysockets/baileys";
 import { db, whatsappAuthTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { eq, like, sql } from "drizzle-orm";
 import { logger } from "./logger";
 
-async function writeKey(key: string, data: unknown): Promise<void> {
-  const value = JSON.stringify(data, BufferJSON.replacer);
-  await db
-    .insert(whatsappAuthTable)
-    .values({ key, value })
-    .onConflictDoUpdate({ target: whatsappAuthTable.key, set: { value } });
+function scopedKey(userId: number, key: string): string {
+  return `${userId}::${key}`;
 }
 
-async function readKey<T>(key: string): Promise<T | null> {
-  try {
-    const [row] = await db.select().from(whatsappAuthTable).where(eq(whatsappAuthTable.key, key));
-    if (!row) return null;
-    return JSON.parse(row.value, BufferJSON.reviver) as T;
-  } catch {
-    return null;
-  }
-}
-
-async function deleteKey(key: string): Promise<void> {
-  await db.delete(whatsappAuthTable).where(eq(whatsappAuthTable.key, key));
-}
-
-export async function usePostgresAuthState(): Promise<{
+export async function usePostgresAuthState(userId: number): Promise<{
   state: AuthenticationState;
   saveCreds: () => Promise<void>;
   clearAuth: () => Promise<void>;
 }> {
+  async function writeKey(key: string, data: unknown): Promise<void> {
+    const value = JSON.stringify(data, BufferJSON.replacer);
+    const fullKey = scopedKey(userId, key);
+    await db
+      .insert(whatsappAuthTable)
+      .values({ key: fullKey, value })
+      .onConflictDoUpdate({ target: whatsappAuthTable.key, set: { value } });
+  }
+
+  async function readKey<T>(key: string): Promise<T | null> {
+    try {
+      const fullKey = scopedKey(userId, key);
+      const [row] = await db.select().from(whatsappAuthTable).where(eq(whatsappAuthTable.key, fullKey));
+      if (!row) return null;
+      return JSON.parse(row.value, BufferJSON.reviver) as T;
+    } catch {
+      return null;
+    }
+  }
+
+  async function deleteKey(key: string): Promise<void> {
+    await db.delete(whatsappAuthTable).where(eq(whatsappAuthTable.key, scopedKey(userId, key)));
+  }
+
   const creds = (await readKey<any>("creds")) ?? initAuthCreds();
 
   const state: AuthenticationState = {
@@ -74,10 +80,8 @@ export async function usePostgresAuthState(): Promise<{
   };
 
   const clearAuth = async (): Promise<void> => {
-    logger.info("Clearing WhatsApp auth from DB");
-    // Delete all auth keys
-    const rows = await db.select().from(whatsappAuthTable);
-    await Promise.all(rows.map((r) => deleteKey(r.key)));
+    logger.info({ userId }, "Clearing WhatsApp auth from DB");
+    await db.delete(whatsappAuthTable).where(like(whatsappAuthTable.key, `${userId}::%`));
   };
 
   return { state, saveCreds, clearAuth };

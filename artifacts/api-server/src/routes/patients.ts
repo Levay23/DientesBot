@@ -9,12 +9,15 @@ import {
   DeletePatientParams,
   ListPatientsQueryParams,
 } from "@workspace/api-zod";
+import { getUserId } from "../middleware/require-auth";
+import { getOwnedPatient, tenantPatient } from "../lib/tenant";
 
 const router: IRouter = Router();
 
 router.get("/patients", async (req, res): Promise<void> => {
+  const userId = getUserId(req);
   const query = ListPatientsQueryParams.safeParse(req.query);
-  const conditions = [];
+  const conditions = [tenantPatient(userId)];
 
   if (query.success) {
     if (query.data.search) {
@@ -45,7 +48,7 @@ router.get("/patients", async (req, res): Promise<void> => {
   const patients = await db
     .select()
     .from(patientsTable)
-    .where(conditions.length ? and(...conditions) : undefined)
+    .where(and(...conditions))
     .orderBy(sql`${patientsTable.createdAt} desc`);
 
   // Próxima cita de cada paciente (solo fechas futuras o de hoy)
@@ -56,8 +59,16 @@ router.get("/patients", async (req, res): Promise<void> => {
 
   const nextApptMap = new Map<number, string>();
   if (patients.length) {
-    const appts = await db.select().from(appointmentsTable)
-      .where(sql`${appointmentsTable.status} IN ('scheduled', 'confirmed') AND ${appointmentsTable.date} >= ${colombiaToday}`)
+    const appts = await db.select({
+      patientId: appointmentsTable.patientId,
+      date: appointmentsTable.date,
+      startTime: appointmentsTable.startTime,
+    }).from(appointmentsTable)
+      .innerJoin(patientsTable, eq(appointmentsTable.patientId, patientsTable.id))
+      .where(and(
+        tenantPatient(userId),
+        sql`${appointmentsTable.status} IN ('scheduled', 'confirmed') AND ${appointmentsTable.date} >= ${colombiaToday}`,
+      ))
       .orderBy(appointmentsTable.date);
     for (const a of appts) {
       if (!nextApptMap.has(a.patientId)) {
@@ -70,29 +81,33 @@ router.get("/patients", async (req, res): Promise<void> => {
 });
 
 router.post("/patients", async (req, res): Promise<void> => {
+  const userId = getUserId(req);
   const parsed = CreatePatientBody.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.message });
     return;
   }
   const cedula = typeof req.body.cedula === "string" ? req.body.cedula.trim() || null : null;
-  const [patient] = await db.insert(patientsTable).values({ ...parsed.data, cedula }).returning();
+  const [patient] = await db.insert(patientsTable).values({ ...parsed.data, cedula, userId }).returning();
   res.status(201).json({ ...patient, nextAppointment: null });
 });
 
 router.get("/patients/stats/by-status", async (req, res): Promise<void> => {
+  const userId = getUserId(req);
   const rows = await db
     .select({ status: patientsTable.status, count: sql<number>`count(*)::int` })
     .from(patientsTable)
+    .where(tenantPatient(userId))
     .groupBy(patientsTable.status);
   res.json(rows);
 });
 
 router.get("/patients/:id", async (req, res): Promise<void> => {
+  const userId = getUserId(req);
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const params = GetPatientParams.safeParse({ id: parseInt(raw, 10) });
   if (!params.success) { res.status(400).json({ error: "Invalid id" }); return; }
-  const [patient] = await db.select().from(patientsTable).where(eq(patientsTable.id, params.data.id));
+  const patient = await getOwnedPatient(userId, params.data.id);
   if (!patient) { res.status(404).json({ error: "Patient not found" }); return; }
   const [nextAppt] = await db.select().from(appointmentsTable)
     .where(and(eq(appointmentsTable.patientId, params.data.id), eq(appointmentsTable.status, "scheduled")))
@@ -101,6 +116,7 @@ router.get("/patients/:id", async (req, res): Promise<void> => {
 });
 
 router.put("/patients/:id", async (req, res): Promise<void> => {
+  const userId = getUserId(req);
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const params = UpdatePatientParams.safeParse({ id: parseInt(raw, 10) });
   if (!params.success) { res.status(400).json({ error: "Invalid id" }); return; }
@@ -110,16 +126,19 @@ router.put("/patients/:id", async (req, res): Promise<void> => {
   const [patient] = await db.update(patientsTable).set({
     ...parsed.data,
     ...(cedula !== undefined ? { cedula } : {}),
-  }).where(eq(patientsTable.id, params.data.id)).returning();
+  }).where(and(eq(patientsTable.id, params.data.id), tenantPatient(userId))).returning();
   if (!patient) { res.status(404).json({ error: "Patient not found" }); return; }
   res.json({ ...patient, nextAppointment: null });
 });
 
 router.delete("/patients/:id", async (req, res): Promise<void> => {
+  const userId = getUserId(req);
   const raw = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const params = DeletePatientParams.safeParse({ id: parseInt(raw, 10) });
   if (!params.success) { res.status(400).json({ error: "Invalid id" }); return; }
-  const [deleted] = await db.delete(patientsTable).where(eq(patientsTable.id, params.data.id)).returning();
+  const [deleted] = await db.delete(patientsTable)
+    .where(and(eq(patientsTable.id, params.data.id), tenantPatient(userId)))
+    .returning();
   if (!deleted) { res.status(404).json({ error: "Patient not found" }); return; }
   res.json({ message: "Patient deleted" });
 });

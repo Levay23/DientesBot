@@ -117,13 +117,14 @@ async function markSent(
 }
 
 async function sendAutomationWhatsApp(
+  userId: number,
   phone: string,
   text: string,
   meta: { automationId: number; patientId: number; appointmentId?: number },
 ): Promise<boolean> {
   if (isSystemMaintenance()) return false;
-  const sock = getWhatsAppSock();
-  const wa = getWAState();
+  const sock = getWhatsAppSock(userId);
+  const wa = getWAState(userId);
   if (!sock || !wa.connected) {
     logger.warn({ ...meta }, "Automatización omitida: WhatsApp no conectado");
     return false;
@@ -154,7 +155,7 @@ async function dispatchMessage(
 ): Promise<void> {
   if (await wasAlreadySent(auto.id, patientId, appointmentId)) return;
 
-  const ok = await sendAutomationWhatsApp(patientPhone, message, {
+  const ok = await sendAutomationWhatsApp(auto.userId, patientPhone, message, {
     automationId: auto.id,
     patientId,
     appointmentId,
@@ -163,13 +164,13 @@ async function dispatchMessage(
   if (ok) {
     await markSent(auto.id, patientId, appointmentId, "sent");
     logger.info({ automationId: auto.id, patientId, appointmentId }, "Automatización enviada");
-  } else if (getWAState().connected) {
+  } else if (getWAState(auto.userId).connected) {
     await markSent(auto.id, patientId, appointmentId, "failed");
   }
   // Si WA no está conectado, no marcar historial para reintentar en el próximo ciclo
 }
 
-async function fetchUpcomingAppointments(): Promise<ApptWithPatient[]> {
+async function fetchUpcomingAppointments(userId: number): Promise<ApptWithPatient[]> {
   const today = getColombiaToday();
   return db.select({
     id: appointmentsTable.id,
@@ -185,12 +186,13 @@ async function fetchUpcomingAppointments(): Promise<ApptWithPatient[]> {
     .from(appointmentsTable)
     .innerJoin(patientsTable, eq(appointmentsTable.patientId, patientsTable.id))
     .where(and(
+      eq(patientsTable.userId, userId),
       inArray(appointmentsTable.status, ["scheduled", "confirmed"]),
       gte(appointmentsTable.date, today),
     ));
 }
 
-async function fetchRecentPastAppointments(): Promise<ApptWithPatient[]> {
+async function fetchRecentPastAppointments(userId: number): Promise<ApptWithPatient[]> {
   const today = getColombiaToday();
   const weekAgo = new Date();
   weekAgo.setDate(weekAgo.getDate() - 14);
@@ -215,6 +217,7 @@ async function fetchRecentPastAppointments(): Promise<ApptWithPatient[]> {
   .from(appointmentsTable)
   .innerJoin(patientsTable, eq(appointmentsTable.patientId, patientsTable.id))
   .where(and(
+      eq(patientsTable.userId, userId),
       gte(appointmentsTable.date, weekAgoStr),
       lte(appointmentsTable.date, today),
     ));
@@ -226,7 +229,7 @@ async function processAppointmentReminders(auto: Automation, _sock: WASocket) {
   const delayMs = delayHours * 60 * 60 * 1000;
   const now = Date.now();
 
-  const appointments = await fetchUpcomingAppointments();
+  const appointments = await fetchUpcomingAppointments(auto.userId);
 
   for (const appt of appointments) {
     const apptStart = appointmentStartMs(appt.date, appt.startTime);
@@ -257,6 +260,7 @@ async function processWelcomeMessages(auto: Automation, _sock: WASocket) {
   const maxCreated = new Date(targetCreatedMs + TOLERANCE_MS);
 
   const patients = await db.select().from(patientsTable).where(and(
+    eq(patientsTable.userId, auto.userId),
     gte(patientsTable.createdAt, minCreated),
     lte(patientsTable.createdAt, maxCreated),
   ));
@@ -273,7 +277,7 @@ async function processFollowUp(auto: Automation, _sock: WASocket) {
   const delayMs = delayHours * 60 * 60 * 1000;
   const now = Date.now();
 
-  const appointments = await fetchRecentPastAppointments();
+  const appointments = await fetchRecentPastAppointments(auto.userId);
 
   for (const appt of appointments) {
     if (appt.status !== "completed") continue;
@@ -299,7 +303,7 @@ async function processMissedAppointment(auto: Automation, _sock: WASocket) {
   const delayMs = delayHours * 60 * 60 * 1000;
   const now = Date.now();
 
-  const appointments = await fetchRecentPastAppointments();
+  const appointments = await fetchRecentPastAppointments(auto.userId);
 
   for (const appt of appointments) {
     const isNoShow = appt.status === "no_show";
@@ -330,9 +334,10 @@ async function processReactivation(auto: Automation, _sock: WASocket) {
   const now = Date.now();
   const cutoff = new Date(now - delayMs);
 
-  const candidates = await db.select().from(patientsTable).where(
+  const candidates = await db.select().from(patientsTable).where(and(
+    eq(patientsTable.userId, auto.userId),
     lte(patientsTable.createdAt, cutoff),
-  );
+  ));
 
   for (const p of candidates) {
     if (await wasAlreadySent(auto.id, p.id, null)) continue;
@@ -362,12 +367,13 @@ const CRON_HANDLERS: Record<string, (auto: Automation, sock: WASocket) => Promis
 };
 
 /** Disparadores por evento (no cron) */
-export async function runAppointmentConfirmedAutomations(appt: ApptWithPatient): Promise<void> {
-  const sock = getWhatsAppSock();
-  if (!sock || !getWAState().connected) return;
+export async function runAppointmentConfirmedAutomations(appt: ApptWithPatient, userId: number): Promise<void> {
+  const sock = getWhatsAppSock(userId);
+  if (!sock || !getWAState(userId).connected) return;
 
   const automations = await db.select().from(automationsTable).where(and(
     eq(automationsTable.active, true),
+    eq(automationsTable.userId, userId),
     eq(automationsTable.trigger, "appointment_confirmed"),
   ));
 
@@ -385,14 +391,6 @@ export async function runAppointmentConfirmedAutomations(appt: ApptWithPatient):
 export async function runAutomations(): Promise<void> {
   if (isSystemMaintenance()) return;
 
-  const sock = getWhatsAppSock();
-  const wa = getWAState();
-
-  if (!sock || !wa.connected) {
-    logger.warn({ connected: wa.connected }, "Motor de automatizaciones: WhatsApp no disponible, se omite ciclo");
-    return;
-  }
-
   const activeAutomations = await db.select().from(automationsTable).where(eq(automationsTable.active, true));
 
   if (!activeAutomations.length) return;
@@ -400,13 +398,16 @@ export async function runAutomations(): Promise<void> {
   logger.info({ count: activeAutomations.length }, "Ejecutando automatizaciones activas");
 
   for (const auto of activeAutomations) {
+    const wa = getWAState(auto.userId);
+    if (!wa.connected) continue;
+
     const handler = CRON_HANDLERS[auto.trigger];
     if (!handler) {
       logger.warn({ automationId: auto.id, trigger: auto.trigger }, "Disparador de automatización no implementado");
       continue;
     }
     try {
-      await handler(auto, sock);
+      await handler(auto, getWhatsAppSock(auto.userId)!);
     } catch (err) {
       logger.error({ err, automationId: auto.id, trigger: auto.trigger }, "Error ejecutando automatización");
     }

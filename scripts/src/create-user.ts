@@ -37,7 +37,18 @@ async function main() {
     `INSERT INTO users (name, email, password_hash, role) VALUES ($1, $2, $3, $4) RETURNING id, name, email, role, created_at`,
     [name, email.trim(), password, role],
   );
-  console.log("Usuario creado:", inserted.rows[0]);
+  const user = inserted.rows[0];
+  const uid = user.id as number;
+  await client.query(
+    `INSERT INTO settings (user_id) SELECT $1 WHERE NOT EXISTS (SELECT 1 FROM settings WHERE user_id = $1)`,
+    [uid],
+  );
+  await client.query(
+    `INSERT INTO ai_personality (user_id) SELECT $1 WHERE NOT EXISTS (SELECT 1 FROM ai_personality WHERE user_id = $1)`,
+    [uid],
+  );
+  console.log("Usuario creado:", user);
+  console.log("Panel vacío listo (settings + ai_personality para user_id", uid + ")");
   await client.end();
 }
 
