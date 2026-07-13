@@ -10,6 +10,9 @@ import {
   aiPersonalityTable,
 } from "@workspace/db";
 import { eq, and, SQL } from "drizzle-orm";
+import { genericPersonalityForUser, genericSettingsForUser } from "./tenant-defaults";
+
+const ADMIN_USER_ID = 1;
 
 export async function getOwnedPatient(userId: number, patientId: number) {
   const [row] = await db.select().from(patientsTable)
@@ -33,7 +36,8 @@ export async function getSettingsForUser(userId: number) {
 export async function ensureSettingsForUser(userId: number) {
   const existing = await getSettingsForUser(userId);
   if (existing) return existing;
-  const [created] = await db.insert(settingsTable).values({ userId }).returning();
+  const values = userId === ADMIN_USER_ID ? { userId } : genericSettingsForUser(userId);
+  const [created] = await db.insert(settingsTable).values(values).returning();
   return created;
 }
 
@@ -41,7 +45,8 @@ export async function ensurePersonalityForUser(userId: number) {
   const [existing] = await db.select().from(aiPersonalityTable)
     .where(eq(aiPersonalityTable.userId, userId)).limit(1);
   if (existing) return existing;
-  const [created] = await db.insert(aiPersonalityTable).values({ userId }).returning();
+  const values = userId === ADMIN_USER_ID ? { userId } : genericPersonalityForUser(userId);
+  const [created] = await db.insert(aiPersonalityTable).values(values).returning();
   return created;
 }
 

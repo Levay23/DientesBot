@@ -3,6 +3,7 @@ import { eq, sql, ilike, or, and } from "drizzle-orm";
 import { logger } from "./logger";
 import { ensureTreatmentsCatalog } from "./treatments-catalog";
 import { ensurePaymentsTable } from "./ensure-payments-table";
+import { ensureDemoOdontologoTenant } from "./ensure-demo-tenant";
 import {
   DEFAULT_CLINIC_ADDRESS,
   buildGeneralKnowledgeContent,
@@ -252,6 +253,8 @@ export async function runStartupSeed(): Promise<void> {
     }
 
     await ensureClinicAddressInDatabase();
+
+    await ensureDemoOdontologoTenant();
 
     // ── Sincronizar estados de pacientes con sus citas ───────────────────────
     // Regla: citas pasadas no canceladas → completed; paciente con citas futuras → scheduled; resto → attended
