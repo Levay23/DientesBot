@@ -1,7 +1,9 @@
-import { useGetMe, useLogout } from "@workspace/api-client-react";
+import { useGetMe } from "@workspace/api-client-react";
 import { Link, useLocation } from "wouter";
-import { clearAuthToken } from "@/lib/auth-token";
+import { getAuthToken } from "@/lib/auth-token";
+import { redirectToLogin, signOut } from "@/lib/sign-out";
 import type { ApiError } from "@workspace/api-client-react";
+import { useQueryClient } from "@tanstack/react-query";
 import { 
   LayoutDashboard, 
   Users, 
@@ -58,9 +60,10 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     },
   });
   const [, setLocation] = useLocation();
-  const logout = useLogout();
+  const queryClient = useQueryClient();
   const [location] = useLocation();
   const [moreOpen, setMoreOpen] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
 
   const authStatus = isError ? (error as ApiError)?.status : undefined;
   const waitingForApi = isLoading || isFetching || authStatus === 503 || authStatus === 502 || authStatus === 504;
@@ -69,21 +72,23 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     if (waitingForApi) return;
     if (user) return;
     if (authStatus === 401 || authStatus === 403) {
-      clearAuthToken();
-      setLocation("/login");
+      void signOut(queryClient).finally(() => redirectToLogin());
     }
-  }, [waitingForApi, user, authStatus, setLocation]);
+  }, [waitingForApi, user, authStatus, setLocation, queryClient]);
 
   if (waitingForApi || !user) {
     return <div className="min-h-screen bg-background flex items-center justify-center"><Skeleton className="w-12 h-12 rounded-full" /></div>;
   }
 
-  const handleLogout = () => {
-    clearAuthToken();
-    logout.mutate(undefined, {
-      onSuccess: () => setLocation("/login"),
-      onError: () => setLocation("/login"),
-    });
+  const handleLogout = async () => {
+    if (loggingOut) return;
+    setLoggingOut(true);
+    setMoreOpen(false);
+    try {
+      await signOut(queryClient);
+    } finally {
+      redirectToLogin();
+    }
   };
 
   const isMoreActive = moreNav.some(item => location.startsWith(item.href));
@@ -131,11 +136,13 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           <Button
             variant="outline"
             size="sm"
+            type="button"
             className="w-full justify-start text-destructive hover:text-destructive hover:bg-destructive/10 border-sidebar-border"
-            onClick={handleLogout}
+            onClick={() => void handleLogout()}
+            disabled={loggingOut}
           >
             <LogOut className="mr-2 h-4 w-4" />
-            Cerrar sesión
+            {loggingOut ? "Cerrando..." : "Cerrar sesión"}
           </Button>
         </div>
       </aside>
@@ -240,8 +247,10 @@ export default function Layout({ children }: { children: React.ReactNode }) {
               <Button
                 variant="ghost"
                 size="icon"
+                type="button"
                 className="text-destructive hover:bg-destructive/10 shrink-0"
-                onClick={handleLogout}
+                onClick={() => void handleLogout()}
+                disabled={loggingOut}
               >
                 <LogOut className="h-5 w-5" />
               </Button>

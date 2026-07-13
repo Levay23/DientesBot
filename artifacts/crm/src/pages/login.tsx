@@ -24,9 +24,10 @@ const loginSchema = z.object({
 type LoginFormValues = z.infer<typeof loginSchema>;
 
 export default function Login() {
+  const hasToken = !!getAuthToken();
   const { data: user, isLoading: isLoadingUser } = useGetMe({
     query: {
-      enabled: !!getAuthToken(),
+      enabled: hasToken,
       retry: (failureCount, err) => {
         const status = (err as ApiError)?.status;
         if (status === 503 || status === 502 || status === 504) return failureCount < 4;
@@ -48,16 +49,17 @@ export default function Login() {
   });
 
   useEffect(() => {
+    if (!hasToken) return;
     if (!isLoadingUser && user) {
       setLocation("/dashboard");
     }
-  }, [isLoadingUser, user, setLocation]);
+  }, [hasToken, isLoadingUser, user, setLocation]);
 
-  if (isLoadingUser) {
+  if (hasToken && isLoadingUser) {
     return <div className="min-h-screen bg-background flex items-center justify-center"><Skeleton className="w-12 h-12 rounded-full" /></div>;
   }
 
-  if (user) {
+  if (hasToken && user) {
     return <div className="min-h-screen bg-background flex items-center justify-center"><Skeleton className="w-12 h-12 rounded-full" /></div>;
   }
 
