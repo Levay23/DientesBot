@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { db, conversationsTable, messagesTable, patientsTable, settingsTable } from "@workspace/db";
-import { eq, ilike, and, or, sql } from "drizzle-orm";
+import { eq, ilike, and, or, sql, inArray } from "drizzle-orm";
 import {
   ListConversationsQueryParams,
   GetConversationParams,
@@ -24,6 +24,7 @@ import {
   isClinicPhone,
   findPatientByPhone,
   isValidColombianPhone,
+  phoneSearchVariants,
 } from "../lib/conversation-patient-sync";
 import { logger } from "../lib/logger";
 
@@ -69,14 +70,41 @@ router.get("/conversations", async (req, res): Promise<void> => {
     .where(conditions.length ? and(...conditions) : undefined)
     .orderBy(sql`${conversationsTable.lastMessageAt} desc nulls last`);
 
+  const patientIds = [...new Set(
+    convs.map((c) => c.patientId).filter((id): id is number => id != null),
+  )];
+  const patientsById = new Map<number, { name: string; phone: string }>();
+  if (patientIds.length) {
+    const rows = await db.select({
+      id: patientsTable.id,
+      name: patientsTable.name,
+      phone: patientsTable.phone,
+    }).from(patientsTable).where(inArray(patientsTable.id, patientIds));
+    for (const p of rows) patientsById.set(p.id, { name: p.name, phone: p.phone });
+  }
+
+  const needsPhoneLookup = convs.some((c) => !c.patientId && isValidColombianPhone(c.phone));
+  const phoneToPatient = new Map<string, { name: string; phone: string }>();
+  if (needsPhoneLookup) {
+    const allPatients = await db.select({
+      name: patientsTable.name,
+      phone: patientsTable.phone,
+    }).from(patientsTable);
+    for (const p of allPatients) {
+      const canonical = formatColombianPhone(p.phone);
+      phoneToPatient.set(canonical, { name: p.name, phone: p.phone });
+      for (const v of phoneSearchVariants(p.phone)) {
+        phoneToPatient.set(formatColombianPhone(v), { name: p.name, phone: p.phone });
+      }
+    }
+  }
+
   const enriched = await Promise.all(convs.map(async (conv) => {
-    let patient = null;
+    let patient: { name: string; phone: string } | null = null;
     if (conv.patientId) {
-      const [p] = await db.select().from(patientsTable).where(eq(patientsTable.id, conv.patientId));
-      if (p) patient = { name: p.name, phone: p.phone };
+      patient = patientsById.get(conv.patientId) ?? null;
     } else if (isValidColombianPhone(conv.phone)) {
-      const p = await findPatientByPhone(conv.phone);
-      if (p) patient = { name: p.name, phone: p.phone };
+      patient = phoneToPatient.get(formatColombianPhone(conv.phone)) ?? null;
     }
     return enrichConversationForApi(conv, patient);
   }));
