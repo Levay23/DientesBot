@@ -5,6 +5,7 @@ import { runStartupSeed } from "./lib/startup-seed";
 import { startAutomationsEngine } from "./lib/automations-engine";
 import { syncAllConversationsWithPatients } from "./lib/conversation-patient-sync";
 import { getWAState } from "./lib/whatsapp";
+import { ensureSchemaColumns } from "./lib/ensure-schema-columns";
 import ffmpeg from "fluent-ffmpeg";
 import ffmpegStatic from "ffmpeg-static";
 import fs from "fs";
@@ -28,7 +29,16 @@ if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
-app.listen(port, (err) => {
+async function main() {
+  // Migración de columnas (incl. user_id multi-tenant) antes de aceptar tráfico
+  try {
+    await ensureSchemaColumns();
+  } catch (err) {
+    logger.error({ err }, "Error crítico en migración de esquema");
+    process.exit(1);
+  }
+
+  app.listen(port, (err) => {
   if (err) {
     logger.error({ err }, "Error listening on port");
     process.exit(1);
@@ -55,4 +65,10 @@ app.listen(port, (err) => {
 
   // Iniciar motor de automatizaciones
   startAutomationsEngine();
+  });
+}
+
+main().catch((err) => {
+  logger.error({ err }, "Error fatal al iniciar servidor");
+  process.exit(1);
 });

@@ -3,7 +3,6 @@ import { eq, sql, ilike, or, and } from "drizzle-orm";
 import { logger } from "./logger";
 import { ensureTreatmentsCatalog } from "./treatments-catalog";
 import { ensurePaymentsTable } from "./ensure-payments-table";
-import { ensureSchemaColumns } from "./ensure-schema-columns";
 import {
   DEFAULT_CLINIC_ADDRESS,
   buildGeneralKnowledgeContent,
@@ -309,7 +308,6 @@ export async function runStartupSeed(): Promise<void> {
 
     await ensureTreatmentsCatalog();
     await ensurePaymentsTable();
-    await ensureSchemaColumns();
 
     logger.info("Startup seed completado");
   } catch (err) {

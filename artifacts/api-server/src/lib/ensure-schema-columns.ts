@@ -39,6 +39,18 @@ export async function ensureSchemaColumns(): Promise<void> {
     CREATE UNIQUE INDEX IF NOT EXISTS ai_personality_user_id_unique ON ai_personality (user_id)
   `);
 
+  // Si había varias filas settings sin user_id, quedan duplicadas por usuario: conservar la menor id
+  await db.execute(sql`
+    DELETE FROM settings s
+    USING settings s2
+    WHERE s.user_id = s2.user_id AND s.id > s2.id
+  `);
+  await db.execute(sql`
+    DELETE FROM ai_personality p
+    USING ai_personality p2
+    WHERE p.user_id = p2.user_id AND p.id > p2.id
+  `);
+
   await db.execute(sql`
     UPDATE whatsapp_auth SET key = '1::' || key
     WHERE key IS NOT NULL AND key NOT LIKE '%::%'
