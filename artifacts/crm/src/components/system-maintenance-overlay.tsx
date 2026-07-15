@@ -27,7 +27,7 @@ export default function SystemMaintenanceOverlay() {
           </p>
         </div>
         <p className="text-xs text-muted-foreground/80 pt-2 border-t border-border/50">
-          El sistema está deshabilitado hasta nueva orden del administrador.
+          API de IA agotada · Sistema suspendido hasta renovación
         </p>
       </div>
     </div>
