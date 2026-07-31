@@ -62,6 +62,10 @@ function Router() {
 }
 
 function App() {
+  if (SYSTEM_MAINTENANCE) {
+    return <SystemMaintenanceOverlay />;
+  }
+
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
@@ -69,7 +73,6 @@ function App() {
           <Router />
         </WouterRouter>
         <Toaster />
-        {SYSTEM_MAINTENANCE && <SystemMaintenanceOverlay />}
       </TooltipProvider>
     </QueryClientProvider>
   );
