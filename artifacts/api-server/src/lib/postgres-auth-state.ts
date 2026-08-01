@@ -36,7 +36,10 @@ export async function usePostgresAuthState(userId: number): Promise<{
     await db.delete(whatsappAuthTable).where(eq(whatsappAuthTable.key, scopedKey(userId, key)));
   }
 
-  const creds = (await readKey<any>("creds")) ?? initAuthCreds();
+  let creds = await readKey<any>("creds");
+  if (!creds || !creds.me) {
+    creds = initAuthCreds();
+  }
 
   const state: AuthenticationState = {
     creds,
