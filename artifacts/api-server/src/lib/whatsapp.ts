@@ -47,6 +47,8 @@ function defaultWaState(): WAState {
 }
 
 const waInstances = new Map<number, WaInstance>();
+// Tracks consecutive failed connection attempts (never reached 'open') per userId
+const connectionFailCount = new Map<number, number>();
 
 function getWa(userId: number): WaInstance {
   if (!waInstances.has(userId)) {
@@ -398,7 +400,7 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo, ownerUserId: nu
           "whatsapp",
           { patientMessage: text },
         );
-        conv = { ...conv, ...updatedConv };
+        conv = { ...conv, ...updatedConv } as typeof conv;
         aiText = amendAiMessageIfBookingFailed(aiResult.message, bookingOutcome);
       } catch (actionErr) {
         logger.error({ actionErr, conversationId: conv.id }, "Error en acciones IA; se envía respuesta al paciente igual");
@@ -456,11 +458,38 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo, ownerUserId: nu
   }
 }
 
+export async function clearAuthAndRestart(userId = 1): Promise<void> {
+  const inst = getWa(userId);
+  if (inst.sock) {
+    try { inst.sock.end(new Error("force clear auth")); } catch {}
+    inst.sock = null;
+  }
+  try {
+    const { clearAuth } = await usePostgresAuthState(userId);
+    await clearAuth();
+  } catch {}
+  connectionFailCount.set(userId, 0);
+  inst.state = { ...defaultWaState(), botEnabled: inst.state.botEnabled };
+  inst.starting = false;
+  setTimeout(() => startWhatsApp(userId), 500);
+}
+
 export async function startWhatsApp(userId = 1): Promise<void> {
   const inst = getWa(userId);
   if (inst.starting) return;
   inst.starting = true;
   inst.state.status = "connecting";
+
+  // If we've failed to connect 2+ times in a row, wipe stale auth to force QR
+  const failCount = connectionFailCount.get(userId) ?? 0;
+  if (failCount >= 2) {
+    logger.warn({ userId, failCount }, "Múltiples intentos fallidos, limpiando credenciales para generar QR...");
+    connectionFailCount.set(userId, 0);
+    try {
+      const { clearAuth } = await usePostgresAuthState(userId);
+      await clearAuth();
+    } catch {}
+  }
 
   try {
     await syncBotEnabled(userId);
@@ -514,21 +543,31 @@ export async function startWhatsApp(userId = 1): Promise<void> {
         inst.state.status = "disconnected";
         inst.state.botEnabled = prevBotEnabled;
 
-        if (isLoggedOut || !wasConnected) {
-          logger.info({ statusCode, userId }, "Limpiando credenciales antiguas para generar nuevo QR...");
-          try {
-            const { clearAuth } = await usePostgresAuthState(userId);
-            await clearAuth();
-          } catch {}
-          inst.state = { ...defaultWaState(), botEnabled: prevBotEnabled };
-          setTimeout(() => startWhatsApp(userId), 1500);
-        } else {
+        if (wasConnected) {
+          // Was genuinely connected: reset fail counter, just retry
+          connectionFailCount.set(userId, 0);
           logger.info({ statusCode, userId }, "WhatsApp desconectado temporalmente, reintentando...");
           setTimeout(() => startWhatsApp(userId), 3000);
+        } else {
+          // Failed to connect (never reached 'open'): increment counter
+          const fails = (connectionFailCount.get(userId) ?? 0) + 1;
+          connectionFailCount.set(userId, fails);
+          logger.info({ statusCode, userId, fails }, "Intento de conexión fallido, reintentando...");
+          if (isLoggedOut) {
+            try {
+              const { clearAuth } = await usePostgresAuthState(userId);
+              await clearAuth();
+            } catch {}
+            connectionFailCount.set(userId, 0);
+          }
+          inst.state = { ...defaultWaState(), botEnabled: prevBotEnabled };
+          setTimeout(() => startWhatsApp(userId), 2000);
         }
       }
 
     if (connection === "open") {
+      // Reset fail counter on successful connection
+      connectionFailCount.set(userId, 0);
       const phone = inst.sock?.user?.id?.split(":")[0] ?? inst.sock?.user?.id ?? "desconocido";
       const prevBotEnabled = inst.state.botEnabled;
       inst.state = {
@@ -547,7 +586,7 @@ export async function startWhatsApp(userId = 1): Promise<void> {
     if (type !== "notify" && type !== "append" && type !== "prepend") return;
 
     for (const msg of messages) {
-      if (type === "append" || type === "prepend") {
+      if ((type as string) === "append" || (type as string) === "prepend") {
         const ts = messageTimestampMs(msg);
         if (ts && Date.now() - ts > 15 * 60 * 1000) continue;
       }

@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { getWAState, sendWAMessage, phoneToJid, disconnectWA, getBotEnabled, setBotEnabled, startWhatsApp } from "../lib/whatsapp";
+import { getWAState, sendWAMessage, phoneToJid, disconnectWA, getBotEnabled, setBotEnabled, startWhatsApp, clearAuthAndRestart } from "../lib/whatsapp";
 import { getUserId } from "../middleware/require-auth";
 
 const router: IRouter = Router();
@@ -63,6 +63,13 @@ router.post("/whatsapp/reconnect", async (req, res): Promise<void> => {
   await disconnectWA(userId);
   setTimeout(() => { startWhatsApp(userId).catch(() => {}); }, 500);
   res.json({ ok: true, status: "disconnected" });
+});
+
+// Force-wipe stale DB credentials and restart fresh → always generates QR
+router.post("/whatsapp/force-qr", async (req, res): Promise<void> => {
+  const userId = getUserId(req);
+  await clearAuthAndRestart(userId);
+  res.json({ ok: true, message: "Credenciales limpiadas, generando QR..." });
 });
 
 router.post("/whatsapp/send", async (req, res): Promise<void> => {
