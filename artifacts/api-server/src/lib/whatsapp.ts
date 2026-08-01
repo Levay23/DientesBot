@@ -505,22 +505,23 @@ export async function startWhatsApp(userId = 1): Promise<void> {
 
       if (connection === "close") {
         const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
-        const isLoggedOut = statusCode === DisconnectReason.loggedOut || statusCode === 401;
+        const isLoggedOut = statusCode === DisconnectReason.loggedOut || statusCode === 401 || statusCode === 403 || statusCode === 428;
         const prevBotEnabled = inst.state.botEnabled;
 
+        const wasConnected = inst.state.connected;
         inst.state.connected = false;
         inst.state.qrDataUrl = null;
         inst.state.status = "disconnected";
         inst.state.botEnabled = prevBotEnabled;
 
-        if (isLoggedOut) {
-          logger.info({ statusCode, userId }, "Sesión de WhatsApp cerrada (loggedOut), borrando credenciales en DB...");
+        if (isLoggedOut || !wasConnected) {
+          logger.info({ statusCode, userId }, "Limpiando credenciales antiguas para generar nuevo QR...");
           try {
             const { clearAuth } = await usePostgresAuthState(userId);
             await clearAuth();
           } catch {}
           inst.state = { ...defaultWaState(), botEnabled: prevBotEnabled };
-          setTimeout(() => startWhatsApp(userId), 3000);
+          setTimeout(() => startWhatsApp(userId), 1500);
         } else {
           logger.info({ statusCode, userId }, "WhatsApp desconectado temporalmente, reintentando...");
           setTimeout(() => startWhatsApp(userId), 3000);
