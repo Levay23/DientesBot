@@ -44,7 +44,7 @@ export default function WhatsApp() {
     queryKey: ["wa-qr"],
     queryFn: () => api("/whatsapp/qr"),
     enabled: !status?.connected,
-    refetchInterval: status?.connected ? false : 5000,
+    refetchInterval: status?.connected ? false : 3000,
   });
 
   const disconnect = useMutation({

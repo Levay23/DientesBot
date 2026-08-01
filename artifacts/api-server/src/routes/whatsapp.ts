@@ -30,6 +30,9 @@ router.get("/whatsapp/qr", noCache, (req, res): void => {
     res.json({ qrCode: null, status: "connected" });
     return;
   }
+  if (state.status === "disconnected" || (!state.qrDataUrl && state.status !== "connecting" && state.status !== "waiting_qr")) {
+    startWhatsApp(userId).catch(() => {});
+  }
   res.json({
     qrCode: state.qrDataUrl ?? null,
     status: state.status,
@@ -51,17 +54,15 @@ router.post("/whatsapp/bot-toggle", async (req, res): Promise<void> => {
 router.post("/whatsapp/disconnect", async (req, res): Promise<void> => {
   const userId = getUserId(req);
   await disconnectWA(userId);
-  setTimeout(() => { startWhatsApp(userId).catch(() => {}); }, 1500);
+  setTimeout(() => { startWhatsApp(userId).catch(() => {}); }, 1000);
   res.json({ ok: true });
 });
 
 router.post("/whatsapp/reconnect", async (req, res): Promise<void> => {
   const userId = getUserId(req);
-  const state = getWAState(userId);
-  if (state.status === "disconnected") {
-    setTimeout(() => { startWhatsApp(userId).catch(() => {}); }, 500);
-  }
-  res.json({ ok: true, status: state.status });
+  await disconnectWA(userId);
+  setTimeout(() => { startWhatsApp(userId).catch(() => {}); }, 500);
+  res.json({ ok: true, status: "disconnected" });
 });
 
 router.post("/whatsapp/send", async (req, res): Promise<void> => {
