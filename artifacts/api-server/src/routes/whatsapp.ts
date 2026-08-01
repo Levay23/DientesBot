@@ -30,8 +30,14 @@ router.get("/whatsapp/qr", noCache, (req, res): void => {
     res.json({ qrCode: null, status: "connected" });
     return;
   }
-  if (state.status === "disconnected" || (!state.qrDataUrl && state.status !== "connecting" && state.status !== "waiting_qr")) {
-    startWhatsApp(userId).catch(() => {});
+  // Si no hay QR y no está en proceso activo, arrancar (o regenerar)
+  if (!state.qrDataUrl && state.status !== "waiting_qr") {
+    if (state.status === "disconnected") {
+      startWhatsApp(userId).catch(() => {});
+    } else if (state.status === "connecting" && !state.qrDataUrl) {
+      // connecting sin QR puede ser sesión muerta: forzar limpio tras pedirlo el cliente
+      startWhatsApp(userId).catch(() => {});
+    }
   }
   res.json({
     qrCode: state.qrDataUrl ?? null,

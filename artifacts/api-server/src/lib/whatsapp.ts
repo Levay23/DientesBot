@@ -3,6 +3,7 @@ import makeWASocket, {
   proto,
   type WASocket,
   Browsers,
+  fetchLatestBaileysVersion,
 } from "@whiskeysockets/baileys";
 import { Boom } from "@hapi/boom";
 import QRCode from "qrcode";
@@ -47,18 +48,31 @@ function defaultWaState(): WAState {
 }
 
 const waInstances = new Map<number, WaInstance>();
-// Tracks consecutive failed connection attempts (never reached 'open') per userId
-const connectionFailCount = new Map<number, number>();
-// Tracks which userIds have never successfully connected this server process
-const neverConnected = new Set<number>();
-// On first startWhatsApp per userId this process, always clear stale auth
-const firstBootDone = new Set<number>();
+/** Evita que un close viejo reinicie encima del socket que está generando QR */
+const socketGeneration = new Map<number, number>();
+const reconnectTimers = new Map<number, ReturnType<typeof setTimeout>>();
 
 function getWa(userId: number): WaInstance {
   if (!waInstances.has(userId)) {
     waInstances.set(userId, { sock: null, state: defaultWaState(), starting: false });
   }
   return waInstances.get(userId)!;
+}
+
+function cancelReconnect(userId: number) {
+  const t = reconnectTimers.get(userId);
+  if (t) {
+    clearTimeout(t);
+    reconnectTimers.delete(userId);
+  }
+}
+
+function scheduleReconnect(userId: number, delayMs: number) {
+  cancelReconnect(userId);
+  reconnectTimers.set(userId, setTimeout(() => {
+    reconnectTimers.delete(userId);
+    startWhatsApp(userId).catch(() => {});
+  }, delayMs));
 }
 
 export const getWhatsAppSock = (userId = 1) => getWa(userId).sock;
@@ -141,16 +155,204 @@ export async function sendMessageToPhone(phone: string, text: string): Promise<b
 }
 
 export async function disconnectWA(userId = 1): Promise<void> {
+  cancelReconnect(userId);
   const inst = getWa(userId);
+  socketGeneration.set(userId, (socketGeneration.get(userId) ?? 0) + 1);
   if (inst.sock) {
     try { await inst.sock.logout(); } catch {}
+    try { inst.sock.end(undefined); } catch {}
     inst.sock = null;
   }
   try {
     const { clearAuth } = await usePostgresAuthState(userId);
     await clearAuth();
   } catch {}
+  inst.starting = false;
   inst.state = { ...defaultWaState(), botEnabled: inst.state.botEnabled };
+}
+
+export async function clearAuthAndRestart(userId = 1): Promise<void> {
+  cancelReconnect(userId);
+  const inst = getWa(userId);
+  socketGeneration.set(userId, (socketGeneration.get(userId) ?? 0) + 1);
+  if (inst.sock) {
+    try { inst.sock.end(undefined); } catch {}
+    inst.sock = null;
+  }
+  try {
+    const { clearAuth } = await usePostgresAuthState(userId);
+    await clearAuth();
+  } catch {}
+  inst.starting = false;
+  inst.state = { ...defaultWaState(), botEnabled: inst.state.botEnabled, status: "connecting" };
+  scheduleReconnect(userId, 800);
+}
+
+export async function startWhatsApp(userId = 1): Promise<void> {
+  const inst = getWa(userId);
+
+  // No reiniciar si ya hay socket activo generando QR / conectando
+  if (inst.starting) return;
+  if (inst.sock && (inst.state.status === "connecting" || inst.state.status === "waiting_qr")) return;
+  if (inst.state.connected && inst.sock) return;
+
+  inst.starting = true;
+  cancelReconnect(userId);
+  const gen = (socketGeneration.get(userId) ?? 0) + 1;
+  socketGeneration.set(userId, gen);
+  inst.state.status = "connecting";
+
+  try {
+    await syncBotEnabled(userId);
+
+    if (inst.sock) {
+      try { inst.sock.end(undefined); } catch {}
+      inst.sock = null;
+    }
+
+    const { state: authState, saveCreds, clearAuth } = await usePostgresAuthState(userId);
+    const hasRegisteredSession = Boolean(authState.creds?.me);
+
+    // Credenciales a medias / sesión muerta → forzar QR limpio
+    if (!hasRegisteredSession) {
+      try { await clearAuth(); } catch {}
+    }
+
+    const { state: freshAuth, saveCreds: saveFreshCreds } = hasRegisteredSession
+      ? { state: authState, saveCreds }
+      : await usePostgresAuthState(userId);
+
+    const { version } = await fetchLatestBaileysVersion();
+
+    inst.sock = makeWASocket({
+      version,
+      auth: freshAuth,
+      printQRInTerminal: false,
+      logger: logger.child({ module: "baileys", userId }) as any,
+      browser: Browsers.ubuntu("Chrome"),
+      connectTimeoutMs: 60_000,
+      defaultQueryTimeoutMs: 60_000,
+      keepAliveIntervalMs: 25_000,
+      retryRequestDelayMs: 1000,
+      maxMsgRetryCount: 3,
+      syncFullHistory: false,
+      markOnlineOnConnect: false,
+      getMessage: async () => undefined,
+    });
+
+    const save = hasRegisteredSession ? saveCreds : saveFreshCreds;
+    inst.sock.ev.on("creds.update", save);
+
+    inst.sock.ev.on("connection.update", async (update) => {
+      if (socketGeneration.get(userId) !== gen) return;
+
+      const { connection, lastDisconnect, qr } = update;
+
+      if (qr) {
+        try {
+          inst.state.qrDataUrl = await QRCode.toDataURL(qr, { width: 300, margin: 2 });
+          inst.state.status = "waiting_qr";
+          inst.state.connected = false;
+          logger.info({ userId, gen }, "QR de WhatsApp generado");
+        } catch (err) {
+          logger.error({ err }, "Error generando QR");
+        }
+      }
+
+      if (connection === "open") {
+        const phone = inst.sock?.user?.id?.split(":")[0] ?? inst.sock?.user?.id ?? "desconocido";
+        const prevBotEnabled = inst.state.botEnabled;
+        inst.state = {
+          connected: true,
+          phone: phone.startsWith("+") ? phone : `+${phone}`,
+          connectedAt: new Date(),
+          status: "connected",
+          qrDataUrl: null,
+          botEnabled: prevBotEnabled,
+        };
+        logger.info({ phone: inst.state.phone, userId }, "WhatsApp conectado exitosamente");
+        return;
+      }
+
+      if (connection === "close") {
+        const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
+        const isLoggedOut =
+          statusCode === DisconnectReason.loggedOut
+          || statusCode === 401
+          || statusCode === 403;
+        const restartRequired = statusCode === DisconnectReason.restartRequired || statusCode === 515;
+        const wasConnected = inst.state.connected;
+        const hadQr = inst.state.status === "waiting_qr" || Boolean(inst.state.qrDataUrl);
+        const prevBotEnabled = inst.state.botEnabled;
+
+        inst.sock = null;
+        inst.state.connected = false;
+        inst.state.botEnabled = prevBotEnabled;
+
+        if (isLoggedOut) {
+          try { await clearAuth(); } catch {}
+          inst.state = { ...defaultWaState(), botEnabled: prevBotEnabled, status: "connecting" };
+          logger.info({ statusCode, userId }, "Sesión WhatsApp cerrada, generando QR nuevo...");
+          scheduleReconnect(userId, 1500);
+          return;
+        }
+
+        if (restartRequired) {
+          // Tras escanear QR Baileys pide reinicio con las mismas creds
+          inst.state.status = "connecting";
+          inst.state.qrDataUrl = null;
+          logger.info({ statusCode, userId }, "WhatsApp reinicio requerido tras emparejar...");
+          scheduleReconnect(userId, 1000);
+          return;
+        }
+
+        if (wasConnected) {
+          inst.state.status = "connecting";
+          inst.state.qrDataUrl = null;
+          logger.info({ statusCode, userId }, "WhatsApp desconectado, reconectando...");
+          scheduleReconnect(userId, 3000);
+          return;
+        }
+
+        // Falló antes de conectar
+        if (hadQr) {
+          inst.state.qrDataUrl = null;
+          inst.state.status = "connecting";
+          logger.info({ statusCode, userId }, "QR expirado, regenerando...");
+          scheduleReconnect(userId, 2000);
+        } else {
+          // Sesión inválida post-DB: sin QR = credenciales muertas → limpiar y forzar QR
+          logger.warn({ statusCode, userId, hasRegisteredSession }, "Sin QR con sesión inválida, limpiando auth...");
+          try { await clearAuth(); } catch {}
+          inst.state = { ...defaultWaState(), botEnabled: prevBotEnabled, status: "connecting" };
+          scheduleReconnect(userId, 2500);
+        }
+      }
+    });
+
+    inst.sock.ev.on("messages.upsert", async ({ messages, type }) => {
+      if (socketGeneration.get(userId) !== gen) return;
+      if (type !== "notify" && type !== "append" && type !== "prepend") return;
+
+      for (const msg of messages) {
+        if ((type as string) === "append" || (type as string) === "prepend") {
+          const ts = messageTimestampMs(msg);
+          if (ts && Date.now() - ts > 15 * 60 * 1000) continue;
+        }
+        try {
+          await handleIncomingMessage(msg, userId);
+        } catch (err) {
+          logger.error({ err, type, jid: msg.key?.remoteJid, userId }, "Error procesando messages.upsert");
+        }
+      }
+    });
+  } catch (err) {
+    logger.error({ err, userId }, "Error iniciando WhatsApp");
+    inst.state.status = "disconnected";
+    scheduleReconnect(userId, 5000);
+  } finally {
+    inst.starting = false;
+  }
 }
 
 async function findMessageByWhatsappId(whatsappMsgId: string) {
@@ -459,156 +661,5 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo, ownerUserId: nu
     }
   } catch (err) {
     logger.error({ err }, "Error procesando mensaje entrante");
-  }
-}
-
-export async function clearAuthAndRestart(userId = 1): Promise<void> {
-  const inst = getWa(userId);
-  if (inst.sock) {
-    try { inst.sock.end(new Error("force clear auth")); } catch {}
-    inst.sock = null;
-  }
-  try {
-    const { clearAuth } = await usePostgresAuthState(userId);
-    await clearAuth();
-  } catch {}
-  connectionFailCount.set(userId, 0);
-  inst.state = { ...defaultWaState(), botEnabled: inst.state.botEnabled };
-  inst.starting = false;
-  setTimeout(() => startWhatsApp(userId), 500);
-}
-
-export async function startWhatsApp(userId = 1): Promise<void> {
-  const inst = getWa(userId);
-  if (inst.starting) return;
-  inst.starting = true;
-  inst.state.status = "connecting";
-
-  // On first boot per userId OR after any failed attempt: wipe stale auth to force fresh QR
-  const failCount = connectionFailCount.get(userId) ?? 0;
-  const isFirstBoot = !firstBootDone.has(userId);
-  firstBootDone.add(userId);
-  if (isFirstBoot || failCount >= 1) {
-    if (isFirstBoot) {
-      logger.info({ userId }, "Primer arranque: limpiando credenciales previas para garantizar QR limpio...");
-    } else {
-      logger.warn({ userId, failCount }, "Intento fallido previo, limpiando credenciales para generar QR...");
-    }
-    connectionFailCount.set(userId, 0);
-    try {
-      const { clearAuth } = await usePostgresAuthState(userId);
-      await clearAuth();
-    } catch {}
-  }
-
-  try {
-    await syncBotEnabled(userId);
-
-    if (inst.sock) {
-      try {
-        inst.sock.end(new Error("restarting WhatsApp socket"));
-      } catch {}
-      inst.sock = null;
-    }
-
-    const { state: authState, saveCreds } = await usePostgresAuthState(userId);
-
-    inst.sock = makeWASocket({
-      auth: authState,
-      printQRInTerminal: false,
-      logger: logger.child({ module: "baileys", userId }) as any,
-      browser: Browsers.ubuntu("Chrome"),
-      connectTimeoutMs: 60000,
-      defaultQueryTimeoutMs: 60000,
-      keepAliveIntervalMs: 25000,
-      retryRequestDelayMs: 1000,
-      maxMsgRetryCount: 3,
-      syncFullHistory: false,
-      markOnlineOnConnect: false,
-    });
-
-    inst.sock.ev.on("creds.update", saveCreds);
-
-    inst.sock.ev.on("connection.update", async (update) => {
-      const { connection, lastDisconnect, qr } = update;
-
-      if (qr) {
-        try {
-          inst.state.qrDataUrl = await QRCode.toDataURL(qr, { width: 300, margin: 2 });
-          inst.state.status = "waiting_qr";
-          logger.info({ userId }, "QR de WhatsApp generado");
-        } catch (err) {
-          logger.error({ err }, "Error generando QR");
-        }
-      }
-
-      if (connection === "close") {
-        const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
-        const isLoggedOut = statusCode === DisconnectReason.loggedOut || statusCode === 401 || statusCode === 403 || statusCode === 428;
-        const prevBotEnabled = inst.state.botEnabled;
-
-        const wasConnected = inst.state.connected;
-        inst.state.connected = false;
-        inst.state.qrDataUrl = null;
-        inst.state.status = "disconnected";
-        inst.state.botEnabled = prevBotEnabled;
-
-        if (wasConnected) {
-          // Was genuinely connected: reset fail counter, just retry
-          connectionFailCount.set(userId, 0);
-          logger.info({ statusCode, userId }, "WhatsApp desconectado temporalmente, reintentando...");
-          setTimeout(() => startWhatsApp(userId), 3000);
-        } else {
-          // Failed to connect (never reached 'open'): increment counter
-          const fails = (connectionFailCount.get(userId) ?? 0) + 1;
-          connectionFailCount.set(userId, fails);
-          logger.info({ statusCode, userId, fails }, "Intento de conexión fallido, reintentando...");
-          if (isLoggedOut) {
-            try {
-              const { clearAuth } = await usePostgresAuthState(userId);
-              await clearAuth();
-            } catch {}
-            connectionFailCount.set(userId, 0);
-          }
-          inst.state = { ...defaultWaState(), botEnabled: prevBotEnabled };
-          setTimeout(() => startWhatsApp(userId), 2000);
-        }
-      }
-
-    if (connection === "open") {
-      // Reset fail counter and mark session as established — future reconnects keep creds
-      connectionFailCount.set(userId, 0);
-      firstBootDone.add(userId);
-      const phone = inst.sock?.user?.id?.split(":")[0] ?? inst.sock?.user?.id ?? "desconocido";
-      const prevBotEnabled = inst.state.botEnabled;
-      inst.state = {
-        connected: true,
-        phone: phone.startsWith("+") ? phone : `+${phone}`,
-        connectedAt: new Date(),
-        status: "connected",
-        qrDataUrl: null,
-        botEnabled: prevBotEnabled,
-      };
-      logger.info({ phone: inst.state.phone, userId }, "WhatsApp conectado exitosamente");
-    }
-  });
-
-  inst.sock.ev.on("messages.upsert", async ({ messages, type }) => {
-    if (type !== "notify" && type !== "append" && type !== "prepend") return;
-
-    for (const msg of messages) {
-      if ((type as string) === "append" || (type as string) === "prepend") {
-        const ts = messageTimestampMs(msg);
-        if (ts && Date.now() - ts > 15 * 60 * 1000) continue;
-      }
-      try {
-        await handleIncomingMessage(msg, userId);
-      } catch (err) {
-        logger.error({ err, type, jid: msg.key?.remoteJid, userId }, "Error procesando messages.upsert");
-      }
-    }
-  });
-  } finally {
-    inst.starting = false;
   }
 }
