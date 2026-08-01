@@ -2,6 +2,7 @@ import makeWASocket, {
   DisconnectReason,
   proto,
   type WASocket,
+  Browsers,
 } from "@whiskeysockets/baileys";
 import { Boom } from "@hapi/boom";
 import QRCode from "qrcode";
@@ -474,59 +475,57 @@ export async function startWhatsApp(userId = 1): Promise<void> {
     const { state: authState, saveCreds } = await usePostgresAuthState(userId);
 
     inst.sock = makeWASocket({
-    auth: authState,
-    printQRInTerminal: false,
-    logger: logger.child({ module: "baileys", userId }) as any,
-    browser: ["Dientes Fijos", "Chrome", "120.0.0"],
-    connectTimeoutMs: 60000,
-    defaultQueryTimeoutMs: 60000,
-    keepAliveIntervalMs: 25000,
-    retryRequestDelayMs: 1000,
-    maxMsgRetryCount: 3,
-    syncFullHistory: false,
-    markOnlineOnConnect: false,
-  });
+      auth: authState,
+      printQRInTerminal: false,
+      logger: logger.child({ module: "baileys", userId }) as any,
+      browser: Browsers.ubuntu("Chrome"),
+      connectTimeoutMs: 60000,
+      defaultQueryTimeoutMs: 60000,
+      keepAliveIntervalMs: 25000,
+      retryRequestDelayMs: 1000,
+      maxMsgRetryCount: 3,
+      syncFullHistory: false,
+      markOnlineOnConnect: false,
+    });
 
-  inst.sock.ev.on("creds.update", saveCreds);
+    inst.sock.ev.on("creds.update", saveCreds);
 
-  inst.sock.ev.on("connection.update", async (update) => {
-    const { connection, lastDisconnect, qr } = update;
+    inst.sock.ev.on("connection.update", async (update) => {
+      const { connection, lastDisconnect, qr } = update;
 
-    if (qr) {
-      try {
-        inst.state.qrDataUrl = await QRCode.toDataURL(qr, { width: 300, margin: 2 });
-        inst.state.status = "waiting_qr";
-        logger.info({ userId }, "QR de WhatsApp generado");
-      } catch (err) {
-        logger.error({ err }, "Error generando QR");
-      }
-    }
-
-    if (connection === "close") {
-      const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
-      const isLoggedOut = statusCode === DisconnectReason.loggedOut || statusCode === 401 || statusCode === 403 || statusCode === 428;
-      const prevBotEnabled = inst.state.botEnabled;
-
-      const wasConnected = inst.state.connected;
-      inst.state.connected = false;
-      inst.state.qrDataUrl = null;
-      inst.state.status = "disconnected";
-      inst.state.botEnabled = prevBotEnabled;
-
-      // Si se cerró la sesión o si falló la conexión sin haberse autenticado, limpiar credenciales viejas para forzar nuevo QR
-      if (isLoggedOut || !wasConnected) {
-        logger.info({ statusCode, userId }, "Limpiando credenciales desactualizadas de WhatsApp para solicitar un nuevo código QR...");
+      if (qr) {
         try {
-          const { clearAuth } = await usePostgresAuthState(userId);
-          await clearAuth();
-        } catch {}
-        inst.state = { ...defaultWaState(), botEnabled: prevBotEnabled };
-        setTimeout(() => startWhatsApp(userId), 1500);
-      } else {
-        logger.info({ statusCode, userId }, "WhatsApp desconectado temporalmente, reintentando...");
-        setTimeout(() => startWhatsApp(userId), 3000);
+          inst.state.qrDataUrl = await QRCode.toDataURL(qr, { width: 300, margin: 2 });
+          inst.state.status = "waiting_qr";
+          logger.info({ userId }, "QR de WhatsApp generado");
+        } catch (err) {
+          logger.error({ err }, "Error generando QR");
+        }
       }
-    }
+
+      if (connection === "close") {
+        const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
+        const isLoggedOut = statusCode === DisconnectReason.loggedOut || statusCode === 401;
+        const prevBotEnabled = inst.state.botEnabled;
+
+        inst.state.connected = false;
+        inst.state.qrDataUrl = null;
+        inst.state.status = "disconnected";
+        inst.state.botEnabled = prevBotEnabled;
+
+        if (isLoggedOut) {
+          logger.info({ statusCode, userId }, "Sesión de WhatsApp cerrada (loggedOut), borrando credenciales en DB...");
+          try {
+            const { clearAuth } = await usePostgresAuthState(userId);
+            await clearAuth();
+          } catch {}
+          inst.state = { ...defaultWaState(), botEnabled: prevBotEnabled };
+          setTimeout(() => startWhatsApp(userId), 3000);
+        } else {
+          logger.info({ statusCode, userId }, "WhatsApp desconectado temporalmente, reintentando...");
+          setTimeout(() => startWhatsApp(userId), 3000);
+        }
+      }
 
     if (connection === "open") {
       const phone = inst.sock?.user?.id?.split(":")[0] ?? inst.sock?.user?.id ?? "desconocido";
