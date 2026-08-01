@@ -49,6 +49,10 @@ function defaultWaState(): WAState {
 const waInstances = new Map<number, WaInstance>();
 // Tracks consecutive failed connection attempts (never reached 'open') per userId
 const connectionFailCount = new Map<number, number>();
+// Tracks which userIds have never successfully connected this server process
+const neverConnected = new Set<number>();
+// On first startWhatsApp per userId this process, always clear stale auth
+const firstBootDone = new Set<number>();
 
 function getWa(userId: number): WaInstance {
   if (!waInstances.has(userId)) {
@@ -480,10 +484,16 @@ export async function startWhatsApp(userId = 1): Promise<void> {
   inst.starting = true;
   inst.state.status = "connecting";
 
-  // If we've failed to connect 2+ times in a row, wipe stale auth to force QR
+  // On first boot per userId OR after any failed attempt: wipe stale auth to force fresh QR
   const failCount = connectionFailCount.get(userId) ?? 0;
-  if (failCount >= 2) {
-    logger.warn({ userId, failCount }, "Múltiples intentos fallidos, limpiando credenciales para generar QR...");
+  const isFirstBoot = !firstBootDone.has(userId);
+  firstBootDone.add(userId);
+  if (isFirstBoot || failCount >= 1) {
+    if (isFirstBoot) {
+      logger.info({ userId }, "Primer arranque: limpiando credenciales previas para garantizar QR limpio...");
+    } else {
+      logger.warn({ userId, failCount }, "Intento fallido previo, limpiando credenciales para generar QR...");
+    }
     connectionFailCount.set(userId, 0);
     try {
       const { clearAuth } = await usePostgresAuthState(userId);
@@ -566,8 +576,9 @@ export async function startWhatsApp(userId = 1): Promise<void> {
       }
 
     if (connection === "open") {
-      // Reset fail counter on successful connection
+      // Reset fail counter and mark session as established — future reconnects keep creds
       connectionFailCount.set(userId, 0);
+      firstBootDone.add(userId);
       const phone = inst.sock?.user?.id?.split(":")[0] ?? inst.sock?.user?.id ?? "desconocido";
       const prevBotEnabled = inst.state.botEnabled;
       inst.state = {
