@@ -66,15 +66,19 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const [loggingOut, setLoggingOut] = useState(false);
 
   const authStatus = isError ? (error as ApiError)?.status : undefined;
-  const waitingForApi = isLoading || isFetching || authStatus === 503 || authStatus === 502 || authStatus === 504;
+  // Solo bloquear en carga inicial: un refetch en background no debe desmontar la página
+  // (eso borraba lo que el usuario estaba escribiendo al cambiar de pestaña)
+  const waitingForApi =
+    (isLoading && !user)
+    || ((authStatus === 503 || authStatus === 502 || authStatus === 504) && !user);
 
   useEffect(() => {
-    if (waitingForApi) return;
+    if (waitingForApi || isFetching) return;
     if (user) return;
     if (authStatus === 401 || authStatus === 403) {
       void signOut(queryClient).finally(() => redirectToLogin());
     }
-  }, [waitingForApi, user, authStatus, setLocation, queryClient]);
+  }, [waitingForApi, isFetching, user, authStatus, setLocation, queryClient]);
 
   if (waitingForApi || !user) {
     return <div className="min-h-screen bg-background flex items-center justify-center"><Skeleton className="w-12 h-12 rounded-full" /></div>;

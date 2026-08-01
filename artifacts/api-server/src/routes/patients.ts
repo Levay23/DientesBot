@@ -51,6 +51,13 @@ router.get("/patients", async (req, res): Promise<void> => {
     .where(and(...conditions))
     .orderBy(sql`${patientsTable.createdAt} desc`);
 
+  // Modo lite: sin próximas citas (más rápido para selects de presupuestos, etc.)
+  const lite = String(req.query.lite ?? "") === "1" || String(req.query.lite ?? "") === "true";
+  if (lite) {
+    res.json(patients.map(p => ({ ...p, nextAppointment: null })));
+    return;
+  }
+
   // Próxima cita de cada paciente (solo fechas futuras o de hoy)
   const colombiaToday = new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/Bogota",

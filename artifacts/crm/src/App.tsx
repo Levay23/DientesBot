@@ -34,7 +34,10 @@ const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       retry: false,
-      staleTime: 30000,
+      staleTime: 60_000,
+      // Evita recargar toda la app al volver de otra pestaña (pierde lo escrito en formularios)
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
     },
   },
 });

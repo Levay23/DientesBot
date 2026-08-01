@@ -42,9 +42,17 @@ export default function Quotations() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
-  const { data: patients } = useListPatients();
-  const { data: catalogTreatments } = useListTreatments();
-  const { data: quotations, isLoading } = useListQuotations();
+  // Pacientes y tratamientos solo al abrir el diálogo: no compiten con la lista de presupuestos
+  const { data: patients } = useListPatients(
+    { lite: "1" } as Parameters<typeof useListPatients>[0],
+    { query: { enabled: dialogOpen, staleTime: 120_000 } },
+  );
+  const { data: catalogTreatments } = useListTreatments({
+    query: { enabled: dialogOpen, staleTime: 120_000 },
+  });
+  const { data: quotations, isLoading } = useListQuotations(undefined, {
+    query: { staleTime: 60_000 },
+  });
 
   const activeTreatments = useMemo(
     () => (catalogTreatments ?? []).filter(t => t.active).sort((a, b) => a.name.localeCompare(b.name, "es")),
