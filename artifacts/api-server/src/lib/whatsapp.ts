@@ -455,14 +455,16 @@ function messageTimestampMs(msg: proto.IWebMessageInfo): number | null {
   return n < 1_000_000_000_000 ? n * 1000 : n;
 }
 
-async function resolvePhoneForJid(whatsappJid: string, formattedPhone: string): Promise<string> {
+async function resolvePhoneForJid(whatsappJid: string, formattedPhone: string, ownerUserId?: number): Promise<string> {
   const [byJid] = await db.select().from(conversationsTable)
-    .where(eq(conversationsTable.whatsappJid, whatsappJid))
+    .where(ownerUserId
+      ? and(eq(conversationsTable.userId, ownerUserId), eq(conversationsTable.whatsappJid, whatsappJid))
+      : eq(conversationsTable.whatsappJid, whatsappJid))
     .limit(1);
   if (byJid?.phone && isValidColombianPhone(byJid.phone)) return byJid.phone;
   if (formattedPhone && isValidColombianPhone(formattedPhone)) return formattedPhone;
-  if (byJid?.phone) return byJid.phone;
-  return formattedPhone;
+  if (byJid?.phone?.trim()) return byJid.phone;
+  return formattedPhone ?? "";
 }
 
 async function handleIncomingMessage(msg: proto.IWebMessageInfo, ownerUserId: number): Promise<void> {
@@ -501,13 +503,16 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo, ownerUserId: nu
   }
 
   const { whatsappJid } = contact;
-  const formattedPhone = await resolvePhoneForJid(whatsappJid, contact.phone);
-  if (!formattedPhone) {
-    logger.warn({ jid: whatsappJid, msgId }, "Teléfono no resuelto para mensaje WhatsApp");
-    return;
+  let formattedPhone = await resolvePhoneForJid(whatsappJid, contact.phone, ownerUserId);
+  // Mensajes @lid sin teléfono: no descartar; usar JID y resolver luego
+  if (!formattedPhone?.trim()) {
+    const [byJid] = await db.select().from(conversationsTable)
+      .where(and(eq(conversationsTable.userId, ownerUserId), eq(conversationsTable.whatsappJid, whatsappJid)))
+      .limit(1);
+    formattedPhone = byJid?.phone?.trim() || contact.phone?.trim() || `wa:${whatsappJid}`;
   }
   const phone = formattedPhone.replace(/^\+/, "");
-  const pushName = msg.pushName ?? formattedPhone;
+  const pushName = msg.pushName ?? (isValidColombianPhone(formattedPhone) ? formattedPhone : "Contacto WhatsApp");
 
   const globalBotEnabled = await syncBotEnabled(ownerUserId);
   const [existingConv] = await db.select().from(conversationsTable)
@@ -636,27 +641,29 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo, ownerUserId: nu
       }).where(eq(conversationsTable.id, conv.id));
 
       const outboundJid = conv.whatsappJid ?? whatsappJid;
-      if (waSock && outboundJid) {
+      // Usar socket actual (no el capturado al inicio: puede haber reconectado durante la IA)
+      const liveSock = getWa(ownerUserId).sock;
+      if (liveSock && outboundJid) {
         logger.info({ jid: outboundJid, status: inst.state.status, wasAudio: parsed.wasAudio }, "Intentando enviar respuesta IA a WhatsApp...");
         try {
           if (parsed.wasAudio) {
             logger.info({ jid: outboundJid }, "Sintetizando audio (TTS) para responder nota de voz");
             const audioResponse = await synthesizeAudio(aiText);
-            await waSock.sendMessage(outboundJid, {
+            await liveSock.sendMessage(outboundJid, {
               audio: audioResponse.buffer,
               mimetype: audioResponse.mimetype,
               ptt: true,
             });
             logger.info({ jid: outboundJid, mimetype: audioResponse.mimetype }, "Respuesta IA enviada exitosamente como nota de voz");
           } else {
-            await waSock.sendMessage(outboundJid, { text: aiText });
+            await liveSock.sendMessage(outboundJid, { text: aiText });
             logger.info({ jid: outboundJid, aiText }, "Respuesta IA enviada exitosamente como texto");
           }
         } catch (wsErr) {
           logger.error({ wsErr, jid: outboundJid }, "Error al enviar mensaje a través de WhatsApp Socket");
         }
       } else {
-        logger.error({ jid: outboundJid, status: inst.state.status }, "CRÍTICO: No se pudo enviar mensaje (sock o JID inválido)");
+        logger.error({ jid: outboundJid, status: inst.state.status, hasSock: !!liveSock }, "CRÍTICO: No se pudo enviar mensaje (sock o JID inválido)");
       }
     }
   } catch (err) {

@@ -1,5 +1,5 @@
 import { db, conversationsTable, patientsTable } from "@workspace/db";
-import { eq, or, sql } from "drizzle-orm";
+import { eq, or, and, sql } from "drizzle-orm";
 import { phoneToJidIfValid, jidToDisplayPhone } from "./jid-utils";
 import { logger } from "./logger";
 
