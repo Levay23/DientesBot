@@ -21,8 +21,11 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import { formatMessageDateTime } from "@/lib/datetime";
+import { getAuthToken } from "@/lib/auth-token";
 
-const API_BASE = "https://dientesbot-api.onrender.com";
+const API_BASE = import.meta.env.PROD
+  ? "https://dientesbot-api.onrender.com"
+  : "";
 
 type ChatMessage = {
   id: number;
@@ -43,7 +46,9 @@ const senderLabel: Record<string, string> = {
 };
 
 function messageMediaUrl(messageId: number): string {
-  return `${API_BASE}/api/messages/media/${messageId}`;
+  const token = getAuthToken();
+  const base = `${API_BASE}/api/messages/media/${messageId}`;
+  return token ? `${base}?token=${encodeURIComponent(token)}` : base;
 }
 
 function MessageBubble({ msg }: { msg: ChatMessage }) {

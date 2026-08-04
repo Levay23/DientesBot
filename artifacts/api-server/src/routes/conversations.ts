@@ -183,7 +183,8 @@ router.get("/messages/media/:messageId", async (req, res): Promise<void> => {
 
   const buffer = Buffer.from(msg.mediaData, "base64");
   res.setHeader("Content-Type", msg.mediaMimeType);
-  res.setHeader("Cache-Control", "public, max-age=86400");
+  res.setHeader("Cache-Control", "private, max-age=3600");
+  res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
   res.send(buffer);
 });
 

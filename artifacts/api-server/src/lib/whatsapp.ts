@@ -52,6 +52,11 @@ const waInstances = new Map<number, WaInstance>();
 const socketGeneration = new Map<number, number>();
 const reconnectTimers = new Map<number, ReturnType<typeof setTimeout>>();
 const connectionFailCount = new Map<number, number>();
+/** Tras reconectar, aceptar historial reciente (ms epoch hasta cuándo) */
+const catchupUntil = new Map<number, number>();
+const CATCHUP_WINDOW_MS = 5 * 60 * 1000;
+const CATCHUP_MAX_AGE_MS = 48 * 60 * 60 * 1000;
+const NORMAL_MAX_AGE_MS = 15 * 60 * 1000;
 
 function getWa(userId: number): WaInstance {
   if (!waInstances.has(userId)) {
@@ -230,7 +235,9 @@ export async function startWhatsApp(userId = 1): Promise<void> {
       keepAliveIntervalMs: 25_000,
       retryRequestDelayMs: 1000,
       maxMsgRetryCount: 3,
-      syncFullHistory: false,
+      // Pedir historial reciente al conectar para retomar chats cortados / no leídos
+      syncFullHistory: true,
+      shouldSyncHistoryMessage: () => true,
       markOnlineOnConnect: false,
       getMessage: async () => undefined,
     });
@@ -255,6 +262,7 @@ export async function startWhatsApp(userId = 1): Promise<void> {
 
       if (connection === "open") {
         connectionFailCount.set(userId, 0);
+        catchupUntil.set(userId, Date.now() + CATCHUP_WINDOW_MS);
         const phone = inst.sock?.user?.id?.split(":")[0] ?? inst.sock?.user?.id ?? "desconocido";
         const prevBotEnabled = inst.state.botEnabled;
         inst.state = {
@@ -265,7 +273,13 @@ export async function startWhatsApp(userId = 1): Promise<void> {
           qrDataUrl: null,
           botEnabled: prevBotEnabled,
         };
-        logger.info({ phone: inst.state.phone, userId }, "WhatsApp conectado exitosamente");
+        logger.info({ phone: inst.state.phone, userId }, "WhatsApp conectado exitosamente — sincronizando mensajes recientes...");
+        // Retomar conversaciones con último mensaje del paciente sin respuesta de IA
+        setTimeout(() => {
+          resumeUnansweredConversations(userId).catch((err) => {
+            logger.error({ err, userId }, "Error retomando conversaciones pendientes");
+          });
+        }, 8000);
         return;
       }
 
@@ -334,10 +348,13 @@ export async function startWhatsApp(userId = 1): Promise<void> {
       if (socketGeneration.get(userId) !== gen) return;
       if (type !== "notify" && type !== "append" && type !== "prepend") return;
 
+      const inCatchup = Date.now() < (catchupUntil.get(userId) ?? 0);
+      const maxAge = inCatchup ? CATCHUP_MAX_AGE_MS : NORMAL_MAX_AGE_MS;
+
       for (const msg of messages) {
-        if ((type as string) === "append" || (type as string) === "prepend") {
+        if ((type as string) === "append" || (type as string) === "prepend" || inCatchup) {
           const ts = messageTimestampMs(msg);
-          if (ts && Date.now() - ts > 15 * 60 * 1000) continue;
+          if (ts && Date.now() - ts > maxAge) continue;
         }
         try {
           await handleIncomingMessage(msg, userId);
@@ -346,6 +363,30 @@ export async function startWhatsApp(userId = 1): Promise<void> {
         }
       }
     });
+
+    // Historial que WhatsApp entrega al reconectar (Baileys)
+    const historyHandler = async (data: { messages?: proto.IWebMessageInfo[] }) => {
+      if (socketGeneration.get(userId) !== gen) return;
+      const msgs = data?.messages;
+      if (!msgs?.length) return;
+      logger.info({ userId, count: msgs.length }, "Historial WhatsApp recibido, procesando recientes...");
+      catchupUntil.set(userId, Date.now() + CATCHUP_WINDOW_MS);
+      const ordered = [...msgs].sort((a, b) => (messageTimestampMs(a) ?? 0) - (messageTimestampMs(b) ?? 0));
+      for (const msg of ordered) {
+        const ts = messageTimestampMs(msg);
+        if (ts && Date.now() - ts > CATCHUP_MAX_AGE_MS) continue;
+        try {
+          await handleIncomingMessage(msg, userId);
+        } catch (err) {
+          logger.error({ err, userId }, "Error procesando mensaje de historial");
+        }
+      }
+    };
+    try {
+      (inst.sock.ev as any).on("messaging-history.set", historyHandler);
+    } catch {
+      // versión sin este evento
+    }
   } catch (err) {
     logger.error({ err, userId }, "Error iniciando WhatsApp");
     inst.state.status = "disconnected";
@@ -360,6 +401,133 @@ async function findMessageByWhatsappId(whatsappMsgId: string) {
     .where(eq(messagesTable.whatsappMsgId, whatsappMsgId))
     .limit(1);
   return row ?? null;
+}
+
+/**
+ * Tras reconectar WhatsApp: conversaciones con último mensaje del paciente
+ * (sin respuesta IA/agente) en las últimas 48h → Andrea responde.
+ */
+async function resumeUnansweredConversations(userId: number): Promise<void> {
+  const inst = getWa(userId);
+  if (!inst.state.connected || !inst.sock) return;
+  if (isSystemMaintenance()) {
+    logger.info({ userId }, "Mantenimiento: se omite retomar conversaciones");
+    return;
+  }
+
+  const globalBotEnabled = await syncBotEnabled(userId);
+  if (!globalBotEnabled) {
+    logger.info({ userId }, "Bot desactivado: no se retoman conversaciones");
+    return;
+  }
+
+  const cutoff = new Date(Date.now() - CATCHUP_MAX_AGE_MS);
+  const activeConvs = await db.select().from(conversationsTable)
+    .where(and(
+      eq(conversationsTable.userId, userId),
+      eq(conversationsTable.aiMode, true),
+      eq(conversationsTable.status, "active"),
+    ))
+    .orderBy(sql`${conversationsTable.lastMessageAt} desc nulls last`)
+    .limit(40);
+
+  let resumed = 0;
+  for (const conv of activeConvs) {
+    if (!inst.state.connected) break;
+    if (resumed >= 15) break;
+
+    const [lastMsg] = await db.select().from(messagesTable)
+      .where(eq(messagesTable.conversationId, conv.id))
+      .orderBy(desc(messagesTable.sentAt))
+      .limit(1);
+
+    if (!lastMsg || lastMsg.sender !== "patient") continue;
+    if (lastMsg.sentAt < cutoff) continue;
+
+    const patientText = (lastMsg.content || "").trim();
+    if (!patientText) continue;
+
+    const outboundJid = conv.whatsappJid
+      || phoneToJidIfValid(conv.phone)
+      || resolveOutboundJid({ whatsappJid: conv.whatsappJid, phone: conv.phone });
+    if (!outboundJid) {
+      logger.warn({ conversationId: conv.id, phone: conv.phone }, "Sin JID para retomar conversación");
+      continue;
+    }
+
+    logger.info({ conversationId: conv.id, phone: conv.phone, userId }, "Retomando conversación sin respuesta...");
+
+    let aiText = "";
+    try {
+      const availableSlots = await getAvailableSlots(userId);
+      const aiResult = await generateAIResponse(conv.id, patientText, { availableSlots, userId });
+
+      try {
+        const { conversation: updatedConv, bookingOutcome } = await processAIActions(
+          {
+            id: conv.id,
+            patientId: conv.patientId,
+            patientName: conv.patientName,
+            phone: conv.phone,
+            userId,
+          },
+          conv.phone,
+          aiResult.actions,
+          "whatsapp",
+          { patientMessage: patientText },
+        );
+        Object.assign(conv, updatedConv);
+        aiText = amendAiMessageIfBookingFailed(aiResult.message, bookingOutcome);
+      } catch (actionErr) {
+        logger.error({ actionErr, conversationId: conv.id }, "Error en acciones IA al retomar");
+        aiText = aiResult.message;
+      }
+
+      if (!aiText?.trim()) {
+        aiText = "Hola, gracias por escribirnos. ¿En qué puedo ayudarte hoy?";
+      }
+    } catch (err) {
+      logger.error({ err, conversationId: conv.id }, "Error generando IA al retomar");
+      continue;
+    }
+
+    // Si mientras generábamos la IA ya respondió (catch-up en paralelo), no duplicar
+    const [freshLast] = await db.select().from(messagesTable)
+      .where(eq(messagesTable.conversationId, conv.id))
+      .orderBy(desc(messagesTable.sentAt))
+      .limit(1);
+    if (freshLast && freshLast.sender !== "patient") {
+      logger.info({ conversationId: conv.id }, "Conversación ya respondida durante catch-up, omitiendo");
+      continue;
+    }
+
+    await db.insert(messagesTable).values({
+      conversationId: conv.id,
+      content: aiText,
+      sender: "ai",
+      messageType: "text",
+      read: true,
+    });
+    await db.update(conversationsTable).set({
+      lastMessage: aiText,
+      lastMessageAt: new Date(),
+    }).where(eq(conversationsTable.id, conv.id));
+
+    const liveSock = getWa(userId).sock;
+    if (liveSock) {
+      try {
+        await liveSock.sendMessage(outboundJid, { text: aiText });
+        resumed += 1;
+        logger.info({ conversationId: conv.id, jid: outboundJid }, "Conversación retomada — respuesta IA enviada");
+      } catch (wsErr) {
+        logger.error({ wsErr, conversationId: conv.id }, "Error enviando respuesta al retomar");
+      }
+    }
+
+    await new Promise((r) => setTimeout(r, 1500));
+  }
+
+  logger.info({ userId, resumed, checked: activeConvs.length }, "Retoma de conversaciones finalizada");
 }
 
 async function findRecentDuplicateMessage(
@@ -589,6 +757,15 @@ async function handleIncomingMessage(msg: proto.IWebMessageInfo, ownerUserId: nu
     if (!aiEnabled) return;
     if (isSystemMaintenance()) {
       logger.info({ phone: formattedPhone }, "Modo mantenimiento: no se envía respuesta IA");
+      return;
+    }
+
+    // Mensajes antiguos del historial (reconexión): solo guardar.
+    // resumeUnansweredConversations responde si el último sigue siendo del paciente.
+    const msgTs = messageTimestampMs(msg);
+    const isStaleHistory = Boolean(msgTs && Date.now() - msgTs > 2 * 60 * 1000);
+    if (isStaleHistory) {
+      logger.info({ phone: formattedPhone, msgId, ageMs: msgTs ? Date.now() - msgTs : null }, "Mensaje histórico guardado; IA diferida a retoma");
       return;
     }
 

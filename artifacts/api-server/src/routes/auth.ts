@@ -40,6 +40,10 @@ export function verifyToken(token: string): number | null {
 export function extractToken(req: any): string | undefined {
   const authHeader = req.headers["authorization"] as string | undefined;
   if (authHeader?.startsWith("Bearer ")) return authHeader.slice(7);
+  // Permite <audio>/<img>/<video src="...?token="> que no envían Authorization
+  const q = req.query?.token;
+  if (typeof q === "string" && q.trim()) return q.trim();
+  if (Array.isArray(q) && typeof q[0] === "string") return q[0].trim();
   return undefined;
 }
 
