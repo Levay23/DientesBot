@@ -51,6 +51,7 @@ const waInstances = new Map<number, WaInstance>();
 /** Evita que un close viejo reinicie encima del socket que está generando QR */
 const socketGeneration = new Map<number, number>();
 const reconnectTimers = new Map<number, ReturnType<typeof setTimeout>>();
+const connectionFailCount = new Map<number, number>();
 
 function getWa(userId: number): WaInstance {
   if (!waInstances.has(userId)) {
@@ -191,7 +192,7 @@ export async function clearAuthAndRestart(userId = 1): Promise<void> {
 export async function startWhatsApp(userId = 1): Promise<void> {
   const inst = getWa(userId);
 
-  // No reiniciar si ya hay socket activo generando QR / conectando
+  // No reiniciar si ya hay socket activo generando QR / conectando / conectado
   if (inst.starting) return;
   if (inst.sock && (inst.state.status === "connecting" || inst.state.status === "waiting_qr")) return;
   if (inst.state.connected && inst.sock) return;
@@ -210,23 +211,17 @@ export async function startWhatsApp(userId = 1): Promise<void> {
       inst.sock = null;
     }
 
+    // IMPORTANTE: no borrar credenciales registradas al arrancar.
+    // Solo se limpian con disconnect/force-qr o logout real (401).
+    // Borrarlas en cada fallo dejaba el bot sin WhatsApp tras reinicios de Render.
     const { state: authState, saveCreds, clearAuth } = await usePostgresAuthState(userId);
     const hasRegisteredSession = Boolean(authState.creds?.me);
-
-    // Credenciales a medias / sesión muerta → forzar QR limpio
-    if (!hasRegisteredSession) {
-      try { await clearAuth(); } catch {}
-    }
-
-    const { state: freshAuth, saveCreds: saveFreshCreds } = hasRegisteredSession
-      ? { state: authState, saveCreds }
-      : await usePostgresAuthState(userId);
 
     const { version } = await fetchLatestBaileysVersion();
 
     inst.sock = makeWASocket({
       version,
-      auth: freshAuth,
+      auth: authState,
       printQRInTerminal: false,
       logger: logger.child({ module: "baileys", userId }) as any,
       browser: Browsers.ubuntu("Chrome"),
@@ -240,8 +235,7 @@ export async function startWhatsApp(userId = 1): Promise<void> {
       getMessage: async () => undefined,
     });
 
-    const save = hasRegisteredSession ? saveCreds : saveFreshCreds;
-    inst.sock.ev.on("creds.update", save);
+    inst.sock.ev.on("creds.update", saveCreds);
 
     inst.sock.ev.on("connection.update", async (update) => {
       if (socketGeneration.get(userId) !== gen) return;
@@ -260,6 +254,7 @@ export async function startWhatsApp(userId = 1): Promise<void> {
       }
 
       if (connection === "open") {
+        connectionFailCount.set(userId, 0);
         const phone = inst.sock?.user?.id?.split(":")[0] ?? inst.sock?.user?.id ?? "desconocido";
         const prevBotEnabled = inst.state.botEnabled;
         inst.state = {
@@ -290,15 +285,16 @@ export async function startWhatsApp(userId = 1): Promise<void> {
         inst.state.botEnabled = prevBotEnabled;
 
         if (isLoggedOut) {
+          // Único caso automático que limpia sesión: WhatsApp invalidó el login
           try { await clearAuth(); } catch {}
+          connectionFailCount.set(userId, 0);
           inst.state = { ...defaultWaState(), botEnabled: prevBotEnabled, status: "connecting" };
-          logger.info({ statusCode, userId }, "Sesión WhatsApp cerrada, generando QR nuevo...");
+          logger.info({ statusCode, userId }, "Sesión WhatsApp cerrada por logout, generando QR...");
           scheduleReconnect(userId, 1500);
           return;
         }
 
         if (restartRequired) {
-          // Tras escanear QR Baileys pide reinicio con las mismas creds
           inst.state.status = "connecting";
           inst.state.qrDataUrl = null;
           logger.info({ statusCode, userId }, "WhatsApp reinicio requerido tras emparejar...");
@@ -307,26 +303,30 @@ export async function startWhatsApp(userId = 1): Promise<void> {
         }
 
         if (wasConnected) {
+          connectionFailCount.set(userId, 0);
           inst.state.status = "connecting";
           inst.state.qrDataUrl = null;
-          logger.info({ statusCode, userId }, "WhatsApp desconectado, reconectando...");
+          logger.info({ statusCode, userId }, "WhatsApp desconectado temporalmente, reconectando (sesion conservada)...");
           scheduleReconnect(userId, 3000);
           return;
         }
 
-        // Falló antes de conectar
+        const nextFails = (connectionFailCount.get(userId) ?? 0) + 1;
+        connectionFailCount.set(userId, nextFails);
+
         if (hadQr) {
           inst.state.qrDataUrl = null;
           inst.state.status = "connecting";
-          logger.info({ statusCode, userId }, "QR expirado, regenerando...");
-          scheduleReconnect(userId, 2000);
-        } else {
-          // Sesión inválida post-DB: sin QR = credenciales muertas → limpiar y forzar QR
-          logger.warn({ statusCode, userId, hasRegisteredSession }, "Sin QR con sesión inválida, limpiando auth...");
-          try { await clearAuth(); } catch {}
-          inst.state = { ...defaultWaState(), botEnabled: prevBotEnabled, status: "connecting" };
+          logger.info({ statusCode, userId, nextFails }, "QR expirado, regenerando...");
           scheduleReconnect(userId, 2500);
+          return;
         }
+
+        // Fallo al restaurar sesión: NO borrar credenciales (evita perder el bot en cada cold start)
+        inst.state.status = hasRegisteredSession ? "connecting" : "disconnected";
+        inst.state.qrDataUrl = null;
+        logger.info({ statusCode, userId, nextFails, hasRegisteredSession }, "Reintento de conexion WhatsApp (credenciales intactas)");
+        scheduleReconnect(userId, Math.min(3000 + nextFails * 1000, 15000));
       }
     });
 

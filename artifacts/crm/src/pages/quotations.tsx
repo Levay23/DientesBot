@@ -180,8 +180,16 @@ export default function Quotations() {
 
     if (editingId) {
       updateQuotation.mutate({ id: editingId, data: payload as any }, {
-        onSuccess: () => {
-          toast({ title: sendToWhatsApp ? "Presupuesto actualizado y enviado" : "Presupuesto actualizado" });
+        onSuccess: (data: any) => {
+          if (sendToWhatsApp && data?.whatsappSent === false) {
+            toast({
+              variant: "destructive",
+              title: "Presupuesto guardado, pero no enviado",
+              description: data.whatsappError || "WhatsApp no está conectado. Conéctalo en la sección WhatsApp.",
+            });
+          } else {
+            toast({ title: sendToWhatsApp ? "Presupuesto actualizado y enviado" : "Presupuesto actualizado" });
+          }
           closeDialog();
           invalidate();
         },
@@ -189,8 +197,16 @@ export default function Quotations() {
       });
     } else {
       createQuotation.mutate({ data: payload as any }, {
-        onSuccess: () => {
-          toast({ title: sendToWhatsApp ? "Presupuesto enviado por WhatsApp" : "Presupuesto creado" });
+        onSuccess: (data: any) => {
+          if (sendToWhatsApp && data?.whatsappSent === false) {
+            toast({
+              variant: "destructive",
+              title: "Presupuesto guardado, pero no enviado",
+              description: data.whatsappError || "WhatsApp no está conectado. Conéctalo en la sección WhatsApp.",
+            });
+          } else {
+            toast({ title: sendToWhatsApp ? "Presupuesto enviado por WhatsApp" : "Presupuesto creado" });
+          }
           closeDialog();
           invalidate();
         },

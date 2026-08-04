@@ -7,7 +7,7 @@ import {
   ListEvolutionNotesParams,
   ListQuotationsQueryParams,
 } from "@workspace/api-zod";
-import { getWhatsAppSock, phoneToJid } from "../lib/whatsapp";
+import { getWhatsAppSock, phoneToJid, getWAState } from "../lib/whatsapp";
 import { logger } from "../lib/logger";
 import { generateQuotationImage } from "../lib/quotation-image";
 import { getUserId } from "../middleware/require-auth";
@@ -88,42 +88,59 @@ router.post("/clinical/quotations", async (req, res): Promise<void> => {
   if (sendToWhatsApp && quotation) {
     try {
       const settings = await getSettingsForUser(userId);
+      const wa = getWAState(userId);
       const sock = getWhatsAppSock(userId);
       const jid = phoneToJid(patient.phone);
       const clinicName = settings?.clinicName ?? "Dientes Fijos Medellín";
 
+      if (!sock || !wa.connected) {
+        logger.warn({ jid, userId }, "Presupuesto guardado pero WhatsApp no conectado");
+        res.status(201).json({
+          ...quotation,
+          whatsappSent: false,
+          whatsappError: "WhatsApp no está conectado. Ve a WhatsApp, escanea el QR y vuelve a enviar el presupuesto.",
+        });
+        return;
+      }
+
       logger.info({ jid, patientName: patient.name }, "Generando imagen de presupuesto profesional");
 
-      if (sock) {
-        try {
-          const imageBuffer = await generateQuotationImage({
-            clinicName,
-            patientName: patient.name,
-            items: data.items.map(i => ({ ...i, quantity: i.quantity ?? 1 })),
-            total: data.total
-          });
+      try {
+        const imageBuffer = await generateQuotationImage({
+          clinicName,
+          patientName: patient.name,
+          items: data.items.map(i => ({ ...i, quantity: i.quantity ?? 1 })),
+          total: data.total
+        });
 
-          const caption = `*📄 PRESUPUESTO - ${clinicName}*\n\nEstimado(a) *${patient.name}*, adjuntamos su presupuesto solicitado. Quedamos atentos a cualquier duda.`;
+        const caption = `*📄 PRESUPUESTO - ${clinicName}*\n\nEstimado(a) *${patient.name}*, adjuntamos su presupuesto solicitado. Quedamos atentos a cualquier duda.`;
 
-          await sock.sendMessage(jid, { image: imageBuffer, caption });
-          await db.update(quotationsTable).set({ status: "sent" }).where(eq(quotationsTable.id, quotation.id));
-          logger.info({ id: quotation.id, jid }, "Presupuesto enviado como IMAGEN");
-        } catch (imgErr) {
-          logger.error({ imgErr }, "Error generando o enviando imagen, intentando texto plano");
-          const itemsText = data.items.map(i => `- ${i.service}: $${i.price.toLocaleString()} x ${i.quantity || 1}`).join("\n");
-          const textMsg = `*📄 PRESUPUESTO - ${clinicName}*\n\nHola *${patient.name}*, aquí tienes el detalle de tu presupuesto:\n\n${itemsText}\n\n*TOTAL: $${data.total.toLocaleString()}*\n\nQuedamos atentos a tu respuesta.`;
-          await sock.sendMessage(jid, { text: textMsg });
-          await db.update(quotationsTable).set({ status: "sent" }).where(eq(quotationsTable.id, quotation.id));
-        }
-      } else {
-        logger.warn({ jid }, "No se pudo enviar presupuesto: Socket de WhatsApp no disponible");
+        await sock.sendMessage(jid, { image: imageBuffer, caption });
+        await db.update(quotationsTable).set({ status: "sent" }).where(eq(quotationsTable.id, quotation.id));
+        logger.info({ id: quotation.id, jid }, "Presupuesto enviado como IMAGEN");
+        res.status(201).json({ ...quotation, status: "sent", whatsappSent: true });
+        return;
+      } catch (imgErr) {
+        logger.error({ imgErr }, "Error generando o enviando imagen, intentando texto plano");
+        const itemsText = data.items.map(i => `- ${i.service}: $${i.price.toLocaleString()} x ${i.quantity || 1}`).join("\n");
+        const textMsg = `*📄 PRESUPUESTO - ${clinicName}*\n\nHola *${patient.name}*, aquí tienes el detalle de tu presupuesto:\n\n${itemsText}\n\n*TOTAL: $${data.total.toLocaleString()}*\n\nQuedamos atentos a tu respuesta.`;
+        await sock.sendMessage(jid, { text: textMsg });
+        await db.update(quotationsTable).set({ status: "sent" }).where(eq(quotationsTable.id, quotation.id));
+        res.status(201).json({ ...quotation, status: "sent", whatsappSent: true });
+        return;
       }
     } catch (err) {
       logger.error({ err }, "Error enviando presupuesto por WhatsApp");
+      res.status(201).json({
+        ...quotation,
+        whatsappSent: false,
+        whatsappError: "El presupuesto se guardó pero no se pudo enviar por WhatsApp. Revisa la conexión.",
+      });
+      return;
     }
   }
 
-  res.status(201).json(quotation);
+  res.status(201).json({ ...quotation, whatsappSent: false });
 });
 
 router.patch("/clinical/quotations/:id", async (req, res): Promise<void> => {
@@ -154,41 +171,57 @@ router.patch("/clinical/quotations/:id", async (req, res): Promise<void> => {
       const patient = await getOwnedPatient(userId, quotation.patientId);
       const settings = await getSettingsForUser(userId);
       if (patient) {
+        const wa = getWAState(userId);
         const sock = getWhatsAppSock(userId);
         const jid = phoneToJid(patient.phone);
         const clinicName = settings?.clinicName ?? "Dientes Fijos Medellín";
 
-        if (sock) {
-          try {
-            const imageBuffer = await generateQuotationImage({
-              clinicName,
-              patientName: patient.name,
-              items: (quotation.items as { service: string; price: number; quantity?: number }[]).map(i => ({ ...i, quantity: i.quantity ?? 1 })),
-              total: quotation.total
-            });
+        if (!sock || !wa.connected) {
+          res.json({
+            ...quotation,
+            whatsappSent: false,
+            whatsappError: "WhatsApp no está conectado. Ve a WhatsApp, escanea el QR y vuelve a enviar el presupuesto.",
+          });
+          return;
+        }
 
-            const caption = `*📄 PRESUPUESTO ACTUALIZADO - ${clinicName}*\n\nEstimado(a) *${patient.name}*, adjuntamos su presupuesto actualizado con los cambios realizados.`;
+        try {
+          const imageBuffer = await generateQuotationImage({
+            clinicName,
+            patientName: patient.name,
+            items: (quotation.items as { service: string; price: number; quantity?: number }[]).map(i => ({ ...i, quantity: i.quantity ?? 1 })),
+            total: quotation.total
+          });
 
-            await sock.sendMessage(jid, { image: imageBuffer, caption });
-            await db.update(quotationsTable).set({ status: "sent" }).where(eq(quotationsTable.id, id));
-            logger.info({ id, jid }, "Presupuesto actualizado enviado como IMAGEN");
-          } catch (imgErr) {
-            logger.error({ imgErr }, "Error generando o enviando imagen actualizada, intentando texto plano");
-            const itemsText = (quotation.items as { service: string; price: number; quantity?: number }[]).map((i) => `- ${i.service}: $${i.price.toLocaleString()} x ${i.quantity || 1}`).join("\n");
-            const textMsg = `*📄 PRESUPUESTO ACTUALIZADO - ${clinicName}*\n\nHola *${patient.name}*, hemos actualizado tu presupuesto:\n\n${itemsText}\n\n*TOTAL: $${quotation.total.toLocaleString()}*`;
-            await sock.sendMessage(jid, { text: textMsg });
-            await db.update(quotationsTable).set({ status: "sent" }).where(eq(quotationsTable.id, id));
-          }
-        } else {
-          logger.warn({ jid }, "No se pudo enviar presupuesto actualizado: Socket de WhatsApp no disponible");
+          const caption = `*📄 PRESUPUESTO ACTUALIZADO - ${clinicName}*\n\nEstimado(a) *${patient.name}*, adjuntamos su presupuesto actualizado con los cambios realizados.`;
+
+          await sock.sendMessage(jid, { image: imageBuffer, caption });
+          await db.update(quotationsTable).set({ status: "sent" }).where(eq(quotationsTable.id, id));
+          logger.info({ id, jid }, "Presupuesto actualizado enviado como IMAGEN");
+          res.json({ ...quotation, status: "sent", whatsappSent: true });
+          return;
+        } catch (imgErr) {
+          logger.error({ imgErr }, "Error generando o enviando imagen actualizada, intentando texto plano");
+          const itemsText = (quotation.items as { service: string; price: number; quantity?: number }[]).map((i) => `- ${i.service}: $${i.price.toLocaleString()} x ${i.quantity || 1}`).join("\n");
+          const textMsg = `*📄 PRESUPUESTO ACTUALIZADO - ${clinicName}*\n\nHola *${patient.name}*, hemos actualizado tu presupuesto:\n\n${itemsText}\n\n*TOTAL: $${quotation.total.toLocaleString()}*`;
+          await sock.sendMessage(jid, { text: textMsg });
+          await db.update(quotationsTable).set({ status: "sent" }).where(eq(quotationsTable.id, id));
+          res.json({ ...quotation, status: "sent", whatsappSent: true });
+          return;
         }
       }
     } catch (err) {
       logger.error({ err }, "Error enviando presupuesto actualizado por WhatsApp");
+      res.json({
+        ...quotation,
+        whatsappSent: false,
+        whatsappError: "El presupuesto se guardó pero no se pudo enviar por WhatsApp.",
+      });
+      return;
     }
   }
 
-  res.json(quotation);
+  res.json({ ...quotation, whatsappSent: false });
 });
 
 router.delete("/clinical/quotations/:id", async (req, res): Promise<void> => {
