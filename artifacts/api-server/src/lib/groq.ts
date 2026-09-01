@@ -1,3 +1,4 @@
+import { GoogleGenAI } from "@google/genai";
 import Groq, { toFile } from "groq-sdk";
 import { db, settingsTable, conversationsTable, messagesTable, patientsTable, aiKnowledgeTable, aiPersonalityTable, quotationsTable, appointmentsTable, treatmentsTable } from "@workspace/db";
 import { eq, desc, or, ilike, and, gte } from "drizzle-orm";
@@ -5,16 +6,35 @@ import { logger } from "./logger";
 import { DEFAULT_CLINIC_ADDRESS } from "./clinic-defaults";
 import { isSystemMaintenance, MAINTENANCE_MESSAGE } from "./maintenance";
 
+const GEMINI_MODEL = "gemini-2.5-flash";
+const GEMINI_MODEL_AUDIO = "gemini-2.5-flash";
+
+let _genAI: GoogleGenAI | null = null;
+function getGenAI(): GoogleGenAI | null {
+  const apiKey = process.env.GEMINI_API_KEY?.trim();
+  if (!apiKey) return null;
+  if (!_genAI) {
+    _genAI = new GoogleGenAI({ apiKey });
+  }
+  return _genAI;
+}
+
 let _groq: Groq | null = null;
-function getGroq(): Groq {
+function getGroq(): Groq | null {
+  const apiKey = process.env.GROQ_API_KEY?.trim();
+  if (!apiKey) return null;
   if (!_groq) {
-    const apiKey = process.env.GROQ_API_KEY ?? "";
-    if (!apiKey) {
-      logger.error("GROQ_API_KEY no está configurada en las variables de entorno del servidor. Andrea no puede responder.");
-    }
     _groq = new Groq({ apiKey });
   }
   return _groq;
+}
+
+/** Convierte historial en formato OpenAI al formato de Gemini */
+function toGeminiContents(history: { role: "user" | "assistant"; content: string }[]) {
+  return history.map((m) => ({
+    role: m.role === "assistant" ? "model" : "user",
+    parts: [{ text: m.content }],
+  }));
 }
 
 export interface AIActions {
@@ -91,6 +111,95 @@ HORARIOS DISPONIBLES (para agendar cita nueva o reagendar; NO ejecutar hasta que
 - No inventes horarios fuera de esta lista.
 ${lines.join("\n")}
 `;
+}
+
+async function callGemini(
+  systemPrompt: string,
+  history: { role: "user" | "assistant"; content: string }[],
+  patientMessage: string,
+): Promise<string> {
+  const genAI = getGenAI();
+  if (!genAI) throw new Error("GEMINI_API_KEY no configurada");
+
+  const geminiContents = [
+    ...toGeminiContents(history.slice(-15)),
+    { role: "user", parts: [{ text: patientMessage }] },
+  ];
+
+  const response = await genAI.models.generateContent({
+    model: GEMINI_MODEL,
+    contents: geminiContents,
+    config: {
+      systemInstruction: systemPrompt,
+      responseMimeType: "application/json",
+      temperature: 0.6,
+    },
+  });
+
+  return response.text?.trim() ?? "{}";
+}
+
+async function callGroq(
+  systemPrompt: string,
+  history: { role: "user" | "assistant"; content: string }[],
+  patientMessage: string,
+): Promise<string> {
+  const groq = getGroq();
+  if (!groq) throw new Error("GROQ_API_KEY no configurada");
+
+  const messages = [
+    { role: "system" as const, content: systemPrompt },
+    ...history.slice(-15),
+    { role: "user" as const, content: patientMessage },
+  ];
+
+  const completion = await groq.chat.completions.create({
+    model: "llama-3.3-70b-versatile",
+    messages,
+    response_format: { type: "json_object" as const },
+    temperature: 0.6,
+  });
+
+  return completion.choices[0]?.message?.content?.trim() ?? "{}";
+}
+
+async function callOpenRouter(
+  systemPrompt: string,
+  history: { role: "user" | "assistant"; content: string }[],
+  patientMessage: string,
+): Promise<string> {
+  const key = process.env.OPENROUTER_API_KEY?.trim();
+  if (!key) throw new Error("OPENROUTER_API_KEY no configurada");
+
+  const messages = [
+    { role: "system", content: systemPrompt },
+    ...history.slice(-15),
+    { role: "user", content: patientMessage },
+  ];
+
+  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${key}`,
+      "Content-Type": "application/json",
+      "HTTP-Referer": "https://dientesbot.web.app",
+      "X-Title": "Dientes Fijos CRM",
+    },
+    body: JSON.stringify({
+      model: "google/gemini-2.0-flash-001",
+      messages,
+      response_format: { type: "json_object" },
+      temperature: 0.6,
+    }),
+  });
+
+  if (!res.ok) {
+    const txt = await res.text();
+    throw new Error(`OpenRouter error ${res.status}: ${txt}`);
+  }
+
+  const data = await res.json();
+  return data.choices?.[0]?.message?.content?.trim() ?? "{}";
 }
 
 export async function generateAIResponse(
@@ -286,28 +395,51 @@ REAGENDAR CITA:
 FORMATO JSON:
 {"message":"tu respuesta","actions":{...}}`;
 
-    const messages = [
-      { role: "system" as const, content: systemPrompt },
-      ...conversationHistory.slice(-15),
-      { role: "user" as const, content: patientMessage },
-    ];
+    // Cadena de proveedores con fallback automático
+    let rawContent = "";
+    const errors: string[] = [];
 
-    const completion = await getGroq().chat.completions.create({
-      model: "llama-3.3-70b-versatile",
-      messages,
-      response_format: { type: "json_object" as const },
-      temperature: 0.6,
-    });
+    // 1. Probar Gemini primero si está configurado
+    if (process.env.GEMINI_API_KEY?.trim()) {
+      try {
+        rawContent = await callGemini(systemPrompt, conversationHistory, patientMessage);
+      } catch (err: any) {
+        errors.push(`Gemini: ${err?.message}`);
+        logger.warn({ err: err?.message }, "Gemini falló, intentando siguiente proveedor...");
+      }
+    }
 
-    const rawContent = completion.choices[0]?.message?.content?.trim() ?? "{}";
-    
-    // Robust JSON extraction to prevent SyntaxError if the LLM adds markdown or text
+    // 2. Probar Groq como alternativa
+    if (!rawContent && process.env.GROQ_API_KEY?.trim()) {
+      try {
+        rawContent = await callGroq(systemPrompt, conversationHistory, patientMessage);
+      } catch (err: any) {
+        errors.push(`Groq: ${err?.message}`);
+        logger.warn({ err: err?.message }, "Groq falló, intentando siguiente proveedor...");
+      }
+    }
+
+    // 3. Probar OpenRouter como alternativa
+    if (!rawContent && process.env.OPENROUTER_API_KEY?.trim()) {
+      try {
+        rawContent = await callOpenRouter(systemPrompt, conversationHistory, patientMessage);
+      } catch (err: any) {
+        errors.push(`OpenRouter: ${err?.message}`);
+        logger.warn({ err: err?.message }, "OpenRouter falló...");
+      }
+    }
+
+    if (!rawContent) {
+      throw new Error(`Ningún proveedor de IA respondió. Errores: ${errors.join(" | ") || "Sin API keys configuradas"}`);
+    }
+
+    // Extracción robusta de JSON
     let jsonStr = rawContent;
     const jsonMatch = rawContent.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
       jsonStr = jsonMatch[0];
     }
-    
+
     const parsed = JSON.parse(jsonStr);
 
     return {
@@ -322,18 +454,15 @@ FORMATO JSON:
       },
     };
   } catch (err: any) {
-    const groqApiKey = process.env.GROQ_API_KEY ?? "";
-    const keyStatus = groqApiKey ? `presente (${groqApiKey.slice(0,8)}...)` : "AUSENTE (variable no configurada en Render)";
     logger.error(
       {
-        err,
         errMessage: err?.message,
-        errStatus: err?.status,
-        errType: err?.constructor?.name,
-        groqKeyStatus: keyStatus,
         conversationId,
+        hasGeminiKey: Boolean(process.env.GEMINI_API_KEY),
+        hasGroqKey: Boolean(process.env.GROQ_API_KEY),
+        hasOpenRouterKey: Boolean(process.env.OPENROUTER_API_KEY),
       },
-      "Error AI - Groq falló"
+      "Error AI - Todos los proveedores fallaron"
     );
     return {
       message: "Hola, gracias por escribirnos a Dientes Fijos Medellín. Cuéntame, ¿en qué puedo ayudarte?",
@@ -342,17 +471,49 @@ FORMATO JSON:
   }
 }
 
+/**
+ * Transcribe un audio usando Gemini (multimodal) o Groq Whisper como fallback.
+ */
 export async function transcribeAudio(buffer: Buffer, mimetype: string): Promise<string> {
-  try {
-    const file = await toFile(buffer, "audio.ogg");
-    const transcription = await getGroq().audio.transcriptions.create({
-      file,
-      model: "whisper-large-v3-turbo",
-      language: "es",
-    });
-    return transcription.text;
-  } catch (err) {
-    logger.error({ err }, "Error STT");
-    throw err;
+  const genAI = getGenAI();
+  if (genAI) {
+    try {
+      const audioBase64 = buffer.toString("base64");
+      const resolvedMime = mimetype?.startsWith("audio/") ? mimetype : "audio/ogg";
+
+      const response = await genAI.models.generateContent({
+        model: GEMINI_MODEL_AUDIO,
+        contents: [
+          {
+            role: "user",
+            parts: [
+              { inlineData: { mimeType: resolvedMime, data: audioBase64 } },
+              { text: "Transcribe el siguiente audio en español colombiano de forma literal. Devuelve SOLO el texto transcrito, sin explicaciones ni formato adicional." },
+            ],
+          },
+        ],
+      });
+
+      return response.text?.trim() ?? "";
+    } catch (err) {
+      logger.warn({ err }, "Fallo transcripción con Gemini, intentando Groq Whisper...");
+    }
   }
+
+  const groq = getGroq();
+  if (groq) {
+    try {
+      const file = await toFile(buffer, "audio.ogg");
+      const transcription = await groq.audio.transcriptions.create({
+        file,
+        model: "whisper-large-v3-turbo",
+        language: "es",
+      });
+      return transcription.text;
+    } catch (err) {
+      logger.error({ err }, "Error STT Groq");
+    }
+  }
+
+  throw new Error("No hay servicio de transcripción de audio disponible.");
 }
