@@ -158,4 +158,39 @@ router.post("/ai-training/test", async (req, res): Promise<void> => {
   }
 });
 
+/** Endpoint de diagnóstico: testea Groq directamente y devuelve el error real si falla */
+router.get("/ai-training/diagnose", async (req, res): Promise<void> => {
+  const groqKey = process.env.GROQ_API_KEY ?? "";
+  const keyStatus = groqKey
+    ? `presente (${groqKey.slice(0, 8)}..., longitud: ${groqKey.length})`
+    : "AUSENTE ❌ - Variable GROQ_API_KEY no configurada en Render";
+
+  let groqTestResult: { ok: boolean; response?: string; error?: string; status?: number } = { ok: false };
+  if (groqKey) {
+    try {
+      const { default: Groq } = await import("groq-sdk");
+      const groq = new Groq({ apiKey: groqKey });
+      const completion = await groq.chat.completions.create({
+        model: "llama-3.3-70b-versatile",
+        messages: [{ role: "user", content: "Responde 'OK'" }],
+        max_tokens: 10,
+      });
+      groqTestResult = { ok: true, response: completion.choices[0]?.message?.content ?? "empty" };
+    } catch (err: any) {
+      groqTestResult = {
+        ok: false,
+        error: err?.message ?? String(err),
+        status: err?.status,
+      };
+    }
+  }
+
+  res.json({
+    groqApiKeyStatus: keyStatus,
+    groqApiTest: groqTestResult,
+    nodeEnv: process.env.NODE_ENV,
+    timestamp: new Date().toISOString(),
+  });
+});
+
 export default router;

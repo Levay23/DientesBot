@@ -8,7 +8,11 @@ import { isSystemMaintenance, MAINTENANCE_MESSAGE } from "./maintenance";
 let _groq: Groq | null = null;
 function getGroq(): Groq {
   if (!_groq) {
-    _groq = new Groq({ apiKey: process.env.GROQ_API_KEY ?? "" });
+    const apiKey = process.env.GROQ_API_KEY ?? "";
+    if (!apiKey) {
+      logger.error("GROQ_API_KEY no está configurada en las variables de entorno del servidor. Andrea no puede responder.");
+    }
+    _groq = new Groq({ apiKey });
   }
   return _groq;
 }
@@ -317,8 +321,20 @@ FORMATO JSON:
         updateStatus: parsed.actions?.updateStatus ?? null,
       },
     };
-  } catch (err) {
-    logger.error({ err }, "Error AI");
+  } catch (err: any) {
+    const groqApiKey = process.env.GROQ_API_KEY ?? "";
+    const keyStatus = groqApiKey ? `presente (${groqApiKey.slice(0,8)}...)` : "AUSENTE (variable no configurada en Render)";
+    logger.error(
+      {
+        err,
+        errMessage: err?.message,
+        errStatus: err?.status,
+        errType: err?.constructor?.name,
+        groqKeyStatus: keyStatus,
+        conversationId,
+      },
+      "Error AI - Groq falló"
+    );
     return {
       message: "Hola, gracias por escribirnos a Dientes Fijos Medellín. Cuéntame, ¿en qué puedo ayudarte?",
       actions: {},
