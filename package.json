@@ -9,8 +9,9 @@
   },
   "private": true,
   "devDependencies": {
+    "prettier": "^3.8.1",
     "typescript": "~5.9.3",
-    "prettier": "^3.8.1"
+    "xlsx": "^0.18.5"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
