@@ -6,8 +6,8 @@ import { logger } from "./logger";
 import { DEFAULT_CLINIC_ADDRESS } from "./clinic-defaults";
 import { isSystemMaintenance, MAINTENANCE_MESSAGE } from "./maintenance";
 
-const GEMINI_MODEL = "gemini-2.5-flash";
-const GEMINI_MODEL_AUDIO = "gemini-2.5-flash";
+const GEMINI_MODELS = ["gemini-3.7-flash", "gemini-3.5-flash", "gemini-2.5-pro"];
+const GEMINI_MODEL_AUDIO = "gemini-3.7-flash";
 
 let _genAI: GoogleGenAI | null = null;
 function getGenAI(): GoogleGenAI | null {
@@ -126,17 +126,28 @@ async function callGemini(
     { role: "user", parts: [{ text: patientMessage }] },
   ];
 
-  const response = await genAI.models.generateContent({
-    model: GEMINI_MODEL,
-    contents: geminiContents,
-    config: {
-      systemInstruction: systemPrompt,
-      responseMimeType: "application/json",
-      temperature: 0.6,
-    },
-  });
+  let lastError: Error | null = null;
+  for (const modelName of GEMINI_MODELS) {
+    try {
+      const response = await genAI.models.generateContent({
+        model: modelName,
+        contents: geminiContents,
+        config: {
+          systemInstruction: systemPrompt,
+          responseMimeType: "application/json",
+          temperature: 0.6,
+        },
+      });
 
-  return response.text?.trim() ?? "{}";
+      const text = response.text?.trim();
+      if (text) return text;
+    } catch (err: any) {
+      lastError = err;
+      logger.warn({ model: modelName, err: err?.message }, "Fallo con modelo Gemini, intentando siguiente...");
+    }
+  }
+
+  throw lastError ?? new Error("Fallo en todos los modelos de Gemini");
 }
 
 async function callGroq(
