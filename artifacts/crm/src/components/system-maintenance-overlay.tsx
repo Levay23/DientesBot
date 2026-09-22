@@ -2,11 +2,11 @@ import { AlertTriangle, CheckCircle2, XCircle, PauseCircle } from "lucide-react"
 import ClinicLogo from "@/components/clinic-logo";
 
 const STATUS_ITEMS = [
-  { label: "Servidor",      status: "ON",  isOk: true },
-  { label: "Base de datos", status: "ON",  isOk: true },
-  { label: "Hosting",       status: "ON",  isOk: true },
-  { label: "Backend",       status: "ON",  isOk: true },
-  { label: "Api Key IA",    status: "Off", isOk: false },
+  { label: "Servidor",      status: "ON",              isOk: true },
+  { label: "Base de datos", status: "Límite superado", isOk: false },
+  { label: "Hosting",       status: "ON",              isOk: true },
+  { label: "Backend",       status: "ON",              isOk: true },
+  { label: "Api Key IA",    status: "ON",              isOk: true },
 ];
 
 export default function SystemMaintenanceOverlay() {
@@ -18,13 +18,13 @@ export default function SystemMaintenanceOverlay() {
       aria-labelledby="maintenance-title"
       aria-describedby="maintenance-desc"
     >
-      <div className="max-w-md w-full rounded-2xl border border-amber-500/30 bg-card shadow-2xl p-6 sm:p-8 space-y-6 text-center">
+      <div className="max-w-md w-full rounded-2xl border border-destructive/30 bg-card shadow-2xl p-6 sm:p-8 space-y-6 text-center">
         <div className="flex justify-center">
           <ClinicLogo size="md" />
         </div>
 
-        <div className="mx-auto w-16 h-16 rounded-full bg-amber-500/10 flex items-center justify-center border border-amber-500/30 animate-pulse">
-          <PauseCircle className="h-9 w-9 text-amber-500" />
+        <div className="mx-auto w-16 h-16 rounded-full bg-destructive/10 flex items-center justify-center border border-destructive/30 animate-pulse">
+          <PauseCircle className="h-9 w-9 text-destructive" />
         </div>
 
         <div className="space-y-2">
@@ -55,8 +55,8 @@ export default function SystemMaintenanceOverlay() {
                   </>
                 ) : (
                   <>
-                    <XCircle className="h-4 w-4 text-amber-500 shrink-0" />
-                    <span className="font-semibold text-amber-500">
+                    <XCircle className="h-4 w-4 text-destructive shrink-0" />
+                    <span className="font-semibold text-destructive">
                       {item.status}
                     </span>
                   </>
@@ -66,10 +66,10 @@ export default function SystemMaintenanceOverlay() {
           ))}
         </div>
 
-        <div className="rounded-lg bg-amber-500/10 border border-amber-500/25 p-3 text-xs text-amber-600 dark:text-amber-400 flex items-center gap-2.5 text-left">
+        <div className="rounded-lg bg-destructive/10 border border-destructive/25 p-3 text-xs text-destructive flex items-center gap-2.5 text-left">
           <AlertTriangle className="h-5 w-5 shrink-0" />
           <span>
-            Activar la api key de Google para continuar con los servicios.
+            La base de datos ha alcanzado el límite permitido. Actualice o amplíe el plan para continuar con los servicios.
           </span>
         </div>
       </div>
